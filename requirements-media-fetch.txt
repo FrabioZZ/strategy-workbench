@@ -1,0 +1,3 @@
+# Standalone media retrieval/probing only; no web app, dotenv, ASR or models.
+yt-dlp==2026.10.26
+av==19.0.2

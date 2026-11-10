@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.env
+data/
+.runtime/
+test-results/
+*.pyc
+node_modules/
+output/
+dist/
+build/
+.test-tmp/
+.superpowers/
+*.log
+*.zip
+user-data/

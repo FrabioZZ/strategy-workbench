@@ -1,0 +1,2 @@
+# Optional, account-free local historical simulator. GPL-3.0-or-later.
+backtrader==1.9.78.123

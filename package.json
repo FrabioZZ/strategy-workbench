@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "description": "Optional public Douyin browser bridge; requires Node.js 20+ and installed Google Chrome",
+  "engines": { "node": ">=20" },
+  "scripts": { "test:browser": "node --test tests/test_douyin_browser.cjs" },
+  "dependencies": {
+    "playwright-core": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.62.1.tgz"
+  }
+}
