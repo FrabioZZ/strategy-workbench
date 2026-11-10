@@ -15,10 +15,10 @@
 
 | 聊天 | ID | 文件职责 | 状态与检查点 |
 |---|---|---|---|
-| Phase 7 - 最终产品校准、发布与 PPT 同步 | 01a1c5ee-a547-7f53-b4ca-e8aee5c4a90d | 产品文档、发布、便携包、PPT交接 | 进行中 |
+| Phase 7 - 最终产品校准、发布与 PPT 同步 | 01a1c5ee-a547-7f53-b4ca-e8aee5c4a90d | 产品文档、发布、便携包、PPT交接 | 已交付，源码/包/PPT均通过基本验收 |
 | Phase 7 - 用户级界面校准与文案清理 | 01a1c5f4-fcd9-7331-a0b8-5a5627a42106 | frontend、UI smoke、phase-7-ui.md | 实现完成，五种宽度和主要流程自测通过 |
 | Phase 7 - 用户流程与界面基本验收 | 01a1c5f6-cde7-7ae1-8336-a637c90f720d | phase-7-review.md | 通过；432 Python、2 Node及浏览器主流程，无剩余必修项 |
-| 制作 Quant 项目介绍 PPT | 01a1c5d7-83f1-7c40-a905-5d52ee96e766 | 独立 PPT 项目 | 已按用户授权交接；准备文案，等待发布后重抓界面 |
+| 制作 Quant 项目介绍 PPT | 01a1c5d7-83f1-7c40-a905-5d52ee96e766 | 独立 PPT 项目 | 16页新版完成；最终截图/备注已同步，PowerPoint复核通过 |
 
 ## 执行与验收计划
 
@@ -29,10 +29,10 @@
 - [x] 布局：桌面与 390/320px 手机无横向溢出，键盘焦点可见；盈亏先于技术详情。
 - [x] 基本验收：独立可见聊天检查主流程，修复必要问题，不扩展对抗审计。
 - [x] 打包：更新版本与用户说明，复用已验证运行时，校验源码清单、ZIP、独立目录启动/退出。
-- [ ] 发布：检查提交文件不含用户数据/Key，提交并推送私有仓库，创建可下载版本并核验哈希。
-- [ ] PPT：向已授权聊天交接最终界面/截图路径和产品口径，跟进修改与成品验收。
+- [x] 发布：检查提交文件不含用户数据/Key，提交并推送私有仓库，创建可下载版本并核验哈希。
+- [x] PPT：向已授权聊天交接最终界面/截图路径和产品口径，跟进修改与成品验收。
 
-现有未提交 `docs/phase-5-index.md` 为此前工作，保留；本阶段不覆盖其内容。最终接受状态与发布证据待补。
+现有未提交 `docs/phase-5-index.md` 为此前工作，保留；本阶段不覆盖其内容。最终接受状态：全部授权工作已完成，无本阶段未关闭必修项。
 
 发布目标：`v0.6.1`，沿用私有仓库 `FrabioZZ/strategy-workbench`，保留旧版本附件。已有 GitHub 系统钥匙串凭据有效；受限进程无法读取钥匙串造成的初始失效提示已通过系统环境只读核验排除。
 
@@ -44,4 +44,20 @@
 - 8765 继续使用现有服务，新版静态文件直接生效；只读取得的首页和5个主要资源与源码字节一致。
 - 正式 `documents/jobs/strategies/resources` 四张表行数与内容 SHA256 前后相同（3/4/0/1）。证据：`.runtime/phase7-release/data-before.json`、`data-after.json`。
 
-源码已通过[独立基本验收](phase-7-review.md)：432 项 Python、2 项 Node、转写状态及四组浏览器流程通过。89 个应用/前端/测试文件在验收前后保持一致。不存在本轮待修复项，发布上传及 PPT 最终接受仍待下方记录。
+源码已通过[独立基本验收](phase-7-review.md)：432 项 Python、2 项 Node、转写状态及四组浏览器流程通过。89 个应用/前端/测试文件在验收前后保持一致。不存在本轮待修复项，发布与 PPT 最终接受记录如下。
+
+## GitHub 交付
+
+2026-11-10 23:14:49（北京时间）发布 [v0.6.1](https://github.com/FrabioZZ/strategy-workbench/releases/tag/v0.6.1)，源码及版本标签对应提交 `40846c8c79eaed6ea2305be87af66852369fd618`。私有仓库 main 推送成功，旧版 v0.6.0 与附件保留。
+
+远端 ZIP 状态 `uploaded`、大小 758679966，与本地 SHA256 完全相同。校验文件一同发布；Release 非草稿，标签提交已核实。证据：`.runtime/phase7-release/github-release.json`。Windows Schannel 首次 push 失败后以单次 OpenSSL 后端重试成功，未修改全局配置或禁用证书校验；远端核验首次临时 EOF 后重试成功。
+
+已通过 `.runtime/phase7-release/ppt-ready.json` 向用户授权的 PPT 聊天提供最终版本、提交、界面地址及截图数据口径。
+
+## PPT 同步接受
+
+最终成品：`C:/Users/Admin/Desktop/quant项目ppt/Quant_产品介绍_v0.6.1_16页.pptx`，283805 字节，SHA256 `bcd4a90558270f6efd81f29b684696f77061386a2084118805d3200d03453be6`。原版保留，新版单独命名。
+
+已替换第4/7/10页的3张最终应用界面，第9页新增盈亏摘要并明确标注演示行情；16页讲述备注同步修正，产品主线为策略提取、确认、执行和盈亏复盘。截图通过应用界面只读取得，没有修改正式资料或账本。
+
+PPT项目完成16页SVG与 Microsoft PowerPoint 实际导出逐页检查，PPTX交付检查通过，包含16页、16份备注、4张内嵌截图和可编辑文字图形。协调再次核验最终PPTX的CRC、页数/备注、演示标签、无“一进二/打板”产品叙事及文件哈希，并查看新版第9页。证据与完整记录：`C:/Users/Admin/Desktop/quant项目ppt/Quant_Product_20261110/sync-phase7.md`、`validation/phase7-final-delivery.json`、`.review/phase7-visual-review.md`。
