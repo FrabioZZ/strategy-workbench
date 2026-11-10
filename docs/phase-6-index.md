@@ -32,8 +32,8 @@ Phase5 协调 01a1c5bd-e854-7802-aa57-6d2136626d00 已收到用户授权的同�
 - [x] 便携软件复制运行环境、模型、公共历史数据，自动初始化缓存和本地库。
 - [x] 独立基本验收及必要修正；全量回归。
 - [x] 新位置启动便携包，验证 API、模型加载、媒体子进程及无手动路径配置。
-- [ ] 本地 Git 提交、GitHub 上传/发布可下载包，核验远程。
-- [ ] 确认成功后用 GPT Dot 的狗头军师通知（待可用入口确认）。
+- [x] 本地 Git 提交、GitHub 上传/发布可下载包，核验远程。
+- [ ] GPT Dot 狗头军师通知：尝试检查桌面入口和Pets连接；Pets连续两次传输失败，未能验证单独推送，改在本聊天明确告知，不伪称已送达Dot。
 
 ## 决策记录
 
@@ -54,3 +54,13 @@ Phase5 协调 01a1c5bd-e854-7802-aa57-6d2136626d00 已收到用户授权的同�
 真实《一进二》完整盘中策略仍不支持，原文缺项不会丢弃；明确独立的日线确认版已通过三条执行路径。无真实LLM Key，所以真实供应商连通与模型质量不冒称已验证。当前接受的是日线研究与模拟软件交付，边界在页面、README和Release说明中保留。
 
 Git候选202个文件检查未发现凭据、用户媒体、数据库或大文件；源码/Release将发布至用户自己的私有仓库。GitHub上传与Dot通知的最终结果在后续记录补齐。
+
+## GitHub 最终交付（22:41:43 +08:00）
+
+- 私有源码仓库：https://github.com/FrabioZZ/strategy-workbench
+- 发布源码提交：`aa49374`，`main`，标签 `v0.6.0`。
+- Release：https://github.com/FrabioZZ/strategy-workbench/releases/tag/v0.6.0
+- ZIP：https://github.com/FrabioZZ/strategy-workbench/releases/download/v0.6.0/StrategyWorkbench-0.6.0-windows-x64.zip
+- GitHub 附件状态 `uploaded`、大小758677969、服务端SHA256与本地一致；Release `isDraft=false`，publishedAt `2026-11-10T14:41:43Z`。
+- 包内60个应用/前端/启动文件的SHA256与已提交源码逐一一致。最终ZIP实际重定位运行验证全部通过。
+- 全系统日线版开发、基本验收、本机部署、源码提交及便携包发布均已完成，早于23:00。完整原视频盘中策略与真实LLM质量边界仍按上述说明保留；Dot通知未能单独验证送达。
