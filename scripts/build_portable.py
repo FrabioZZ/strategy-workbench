@@ -9,7 +9,7 @@ import sys
 import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / 'output' / 'StrategyWorkbench-0.6.0-windows-x64'
+OUT = ROOT / 'output' / 'StrategyWorkbench-0.6.1-windows-x64'
 IGNORE = shutil.ignore_patterns('__pycache__', '*.pyc', '.cache', '.git', 'user-data')
 
 
@@ -62,16 +62,16 @@ def main():
     subprocess.run([str(csc), '/nologo', '/target:winexe', '/define:STOP', '/reference:System.Windows.Forms.dll', '/reference:System.Web.Extensions.dll',
                     '/out:' + str(OUT / 'StopWorkbench.exe'), str(ROOT / 'scripts/PortableLauncher.cs')], check=True)
     (OUT / '使用说明.txt').write_text(
-        '策略拾录 0.6.0 Windows 便携版\n\n'
+        '策略拾录 0.6.1 Windows 便携版\n\n'
         '1. 完整解压到可写目录，双击 StrategyWorkbench.exe。首次导入内置历史行情需要片刻。\n'
         '2. 软件自动打开浏览器；语音模型、Python、下载浏览器及缓存均已内置，无需安装配置。\n'
         '3. 只需在 AI 设置中选择模型供应商并填写自己的 API Key。Key 使用 Windows 本机加密。\n'
         '4. 用户资料及缓存保存在本软件目录 user-data，可整体备份；不要删除它。\n'
         '5. 关闭浏览器后本地服务仍运行；双击 StopWorkbench.exe 可完全退出。请在转写/回测任务结束后退出。\n'
-        '6. 回测和模拟盘不连接券商、不产生真实订单；日线无法复现盘中打板/盘口规则。\n'
+        '6. 提取并确认策略后，在回测或模拟盘中运行，查看盈亏、收益率与交易记录。当前版本为模拟交易，不连接券商。\n'
         '7. 公共视频或免费行情仍受平台网络、验证码及可用性影响；失败会保留缓存并支持重试。\n'
         '8. 第三方组件及模型许可见 runtime/python/LICENSE.txt、resources/models 和 licenses。\n', encoding='utf-8')
-    manifest = {'version': '0.6.0', 'platform': 'windows-x64', 'python': sys.version.split()[0],
+    manifest = {'version': '0.6.1', 'platform': 'windows-x64', 'python': sys.version.split()[0],
                 'includes_user_data': False, 'includes_api_keys': False,
                 'asr': 'faster-whisper-small', 'build_files': {}}
     for folder in ['app', 'frontend', 'scripts']:

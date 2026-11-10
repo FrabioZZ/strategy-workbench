@@ -5,14 +5,14 @@
   const panel = document.createElement('section');
   panel.id = 'quote-panel'; panel.className = 'quote-panel'; panel.setAttribute('aria-labelledby', 'quote-title');
   panel.innerHTML = `
-    <div class="quote-heading"><div><p class="quote-eyebrow">免费公开行情 · 无需第三方账号</p><h2 id="quote-title">最新行情与持仓估值</h2></div><button id="quote-refresh" class="secondary" type="button">刷新报价与估值</button></div>
-    <p class="helper">直接选股即可查看报价。增量模拟账户按现有持仓估值，报价刷新不触发策略交易。</p>
+    <div class="quote-heading"><div><h2 id="quote-title">最新行情与持仓估值</h2></div><button id="quote-refresh" class="secondary" type="button">刷新报价与估值</button></div>
+    <p class="helper">公开行情可能延迟。刷新报价只更新持仓估值，不触发交易。</p>
     <div class="quote-picker"><label for="quote-search">搜索股票名称或代码</label><input id="quote-search" type="search" placeholder="例如：平安银行 / 000001" autocomplete="off"><p id="quote-universe" class="helper"></p><div id="quote-stocks" class="quote-stocks" aria-label="行情股票选择"></div><button id="quote-more" class="quiet" type="button" hidden>显示更多股票</button>
       <form id="quote-direct" hidden><label for="quote-code">直接输入沪深A股代码</label><div class="quote-direct-row"><input id="quote-code" placeholder="600000.SH" pattern="(6[0-9]{5}\.SH|[03][0-9]{5}\.SZ)" required><button class="secondary" type="submit">查看报价</button></div></form>
     </div>
     <p id="quote-feedback" role="status" aria-live="polite">打开模拟盘后读取最新报价。</p>
     <div id="quote-result"><p class="empty-copy">正在读取股票池…</p></div>
-    <section class="quote-valuation" aria-labelledby="quote-valuation-title"><h3 id="quote-valuation-title">增量账户 · 独立持仓估值</h3><label id="quote-account-label" hidden>估值账户<select id="quote-account"></select></label><div id="quote-account-result"></div><p id="quote-historical" class="helper"></p></section>
+    <section class="quote-valuation" aria-labelledby="quote-valuation-title"><h3 id="quote-valuation-title">增量账户持仓估值</h3><label id="quote-account-label" hidden>估值账户<select id="quote-account"></select></label><div id="quote-account-result"></div><p id="quote-historical" class="helper"></p></section>
     <details class="quote-behavior"><summary>刷新方式与估值口径</summary><p>可见的模拟盘页面每 45 秒刷新；切换工作区或隐藏页面时暂停页面轮询，返回时刷新。手动刷新共用服务端缓存，不能突破限流。</p><p>本地服务运行时，独立后台每 45 秒检查增量账户的持仓（含暂停账户），以及最近 120 秒页面关注过的股票。关闭页面后持仓仍刷新；退出本地服务后停止。没有持仓时只显示账面现金。</p><p>总资产＝现金＋有效现价×股数；浮盈亏＝持仓市值−账面持仓成本，账面成本沿用已记录费用。报价缺失、过期、零成交状态未知或源故障时不提供完整估值。公开快照可能延迟，来源时间是供应商快照时间，并非逐笔成交时间。</p><p>历史回放与 Backtrader 保留历史账本，不纳入这里的最新估值。行情刷新不改写历史净值、委托、成交或组合版本；原日线模拟仍按下方说明独立运行。</p></details>`;
   host.querySelector('.work-heading').after(panel);
   const q = s => panel.querySelector(s);

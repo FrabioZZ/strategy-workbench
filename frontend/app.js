@@ -17,7 +17,7 @@ async function syncWakeLock() {
     if(!activeJob(state.current) || document.visibilityState!=='visible'){await lock.release();return;}
     state.wakeLock=lock;
     lock.addEventListener('release',()=>{if(state.wakeLock===lock)state.wakeLock=null;});
-  } catch { /* Browser/OS may refuse: the visible wakefulness reminder remains. */ }
+  } catch { /* Browser/OS may refuse the wake lock. */ }
   finally {state.wakePending=false;}
 }
 function timeLabel(value) {if (value == null) return '无时间戳'; const n = Math.floor(value); return `${String(Math.floor(n / 60)).padStart(2,'0')}:${String(n % 60).padStart(2,'0')}`;}
@@ -34,9 +34,9 @@ async function action(fn) {try {await fn();} catch (error) {notify(error.message
 async function refreshConfig() {
   state.config = await api('/api/status'); const c=state.config;
   $('#configuration-status').innerHTML = `<div class="config-row"><strong>本地语音转写</strong><span class="${c.asr_configured?'':'not-ready'}">${esc(c.asr_note)}</span></div><div class="config-row"><strong>策略提取</strong><span class="${c.ai_configured?'':'not-ready'}">${esc(c.ai_note)}</span></div>`;
-  $('#asr-import-hint').textContent = `${c.asr_note}。单文件不超过 ${c.max_upload_mb} MB，媒体最长 ${c.max_duration_minutes} 分钟。`;
+  $('#asr-import-hint').textContent = `${c.asr_configured ? "本地转写已就绪" : "语音转写未配置，请先打开运行配置"}。上限 ${c.max_upload_mb} MB / ${c.max_duration_minutes} 分钟。`;
   if(state.current) updateButtons();
-  $('#ai-hint').textContent = c.ai_configured ? `当前模型：${c.ai_provider || '已配置服务'} · ${c.ai_model}。点击提取后会将转写发送至该模型服务，进行校正和策略提取。` : 'AI 尚未配置。请在“运行配置”中选择服务和模型；转写与校对可先完成。';
+  $('#ai-hint').textContent = c.ai_configured ? `提取使用 ${c.ai_provider || '已配置服务'} / ${c.ai_model}，转写内容将发送到该服务。` : 'AI 尚未配置。请在“运行配置”中选择服务和模型；转写与校对可先完成。';
 }
 async function refreshLibrary() {state.documents = await api('/api/documents'); renderLibrary();}
 function renderLibrary() {
@@ -65,7 +65,7 @@ function renderDocument() {
   $('#transcription-state').className=`transcription-state${complete?' complete':''}`;
   $('#transcription-icon').textContent=complete?'✓':mediaJob?'…':'○';
   $('#transcript-title').textContent=mediaJob?(mediaJob.kind==='download'?'正在获取媒体':'正在识别'):complete?(['text','subtitle'].includes(d.source_type)?'原文已就绪':'转写完成'):d.has_media?(!state.config?.asr_configured?'待配置语音转写':'转写尚未完成'):'等待获取媒体';
-  $('#transcript-summary').textContent=complete?'内容已保存到本机，可以提取策略；需要时展开下方原文校对。':mediaJob?'完成后会在这里显示勾选，无需停留查看全文。':d.has_media?'已保留本机缓存，可继续转写，无需重新下载。':'导入的媒体获取成功后，将自动接续本地语音转写。';
+  $('#transcript-summary').textContent=complete?'可以提取策略，或展开原文校对。':mediaJob?'处理中，完成后可提取策略。':d.has_media?'已保留本机缓存，可继续转写，无需重新下载。':'导入的媒体获取成功后，将自动接续本地语音转写。';
   const review=$('#transcript-review');
   if(review.dataset.document!==d.id){review.open=false;review.dataset.document=d.id;}
   review.hidden=!d.segments.length;
@@ -105,12 +105,12 @@ function renderJob() {
   if(!j || j.status==='succeeded') {el.hidden=true;return;}
   el.hidden=false;const busy=['queued','running'].includes(j.status);el.className=busy?'running':'failed';
   const message=busy?(j.kind==='transcribe'?'识别中，请保持程序打开并保持设备唤醒。':j.kind==='download'?'正在获取媒体，完成后自动接续转写。请保持程序打开并保持设备唤醒。':'正在处理策略，请保持程序打开并保持设备唤醒。'):(j.error||'任务未完成，请重试。');
-  el.innerHTML=`<div class="job-heading"><strong>${esc(j.stage)}</strong>${busy?'':`<button class="secondary" data-retry="${esc(j.id)}" ${j.kind==='transcribe'&&!state.config?.asr_configured?'disabled':''}>${j.kind==='download'?'重试获取并转写':j.kind==='transcribe'?'重试缓存转写':'重试提取'}</button>`}</div><p>${esc(message)}</p>${busy?'<div class="indeterminate-progress" role="progressbar" aria-label="正在处理，进度暂不可确定"><span></span></div><p class="job-helper">关闭或休眠设备会中断本机任务；浏览器无法保证设备保持唤醒。</p>':''}`;
+  el.innerHTML=`<div class="job-heading"><strong>${esc(j.stage)}</strong>${busy?'':`<button class="secondary" data-retry="${esc(j.id)}" ${j.kind==='transcribe'&&!state.config?.asr_configured?'disabled':''}>${j.kind==='download'?'重试获取并转写':j.kind==='transcribe'?'重试缓存转写':'重试提取'}</button>`}</div><p>${esc(message)}</p>${busy?'<div class="indeterminate-progress" role="progressbar" aria-label="正在处理，进度暂不可确定"><span></span></div>':''}`;
 }
 function evidenceMarkup(evidence) {return evidence.map(e=>{const corrected=e.transcript_version==='corrected';return `<div class="evidence"><button type="button" data-evidence="${esc(e.segment_id)}" data-transcript-version="${corrected?'corrected':'original'}" data-time="${e.start??''}">↗ ${esc(timeLabel(e.start))} · ${corrected?'校正版依据 · 对照原始段落':'查看原始段落'} ${esc(e.segment_id.slice(1))}</button><blockquote>“${esc(e.quote)}”</blockquote></div>`;}).join('');}
 function renderStrategy() {
   const d=state.current,s=d.strategy;
-  if(!s) {$('#strategy-content').innerHTML='<div class="empty-state"><span aria-hidden="true">引</span><h3>从原话形成有依据的草案</h3><p>转写完成后点击“提取策略”。这里将显示买卖条件、仓位、止损和对应原文依据。</p><p class="muted">未明确的条件会保留为待澄清项，原文可随时展开校对。</p></div>';return;}
+  if(!s) {$('#strategy-content').innerHTML='<div class="empty-state"><span aria-hidden="true">引</span><h3>从原话形成有依据的草案</h3><p>转写完成后点击“提取策略”。这里将显示买卖条件、仓位、止损和对应原文依据。</p></div>';return;}
   $('#strategy-content').innerHTML=`<div class="strategy-body">${d.strategy_stale?'<div class="stale">转写已修改。这份草案属于旧版本，请重新提取后导出；旧引用不再定位当前原文。</div>':''}<h3>${esc(s.title)}</h3><p class="draft-note">草案 · 待人工复核 · ${esc(d.strategy_provider)} / ${esc(d.strategy_model)} · 来源版本 ${d.strategy_revision}</p><dl class="facts"><div><dt>标的 / 范围</dt><dd>${esc(s.asset?.value||'原文未明确')}</dd></div><div><dt>观察 / 持仓周期</dt><dd>${esc(s.timeframe?.value||'原文未明确')}</dd></div></dl>${s.asset?evidenceMarkup(s.asset.evidence):''}${s.timeframe?evidenceMarkup(s.timeframe.evidence):''}${s.rules.map(r=>`<article class="rule"><h4>${esc(labels[r.kind])}</h4><p>${esc(r.text)}</p>${r.needs_clarification?'<span class="clarification">含模糊条件，需进一步澄清</span>':''}${evidenceMarkup(r.evidence)}</article>`).join('') || '<p class="muted">未提取到有依据的交易规则。</p>'}<section class="questions"><h3>待澄清与核对</h3><ul>${s.questions.map(q=>`<li>${esc(q)}</li>`).join('')}</ul><p class="draft-note">${esc(s.notice)}</p></section></div>`;
   if(d.strategy_stale) document.querySelectorAll('[data-evidence]').forEach(b=>b.disabled=true);
 }
