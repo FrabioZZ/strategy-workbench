@@ -12,11 +12,17 @@ from app.models import Segment
 
 
 class Jobs:
-    def __init__(self, store, settings, extractor):
+    def __init__(self, store, settings, extractor, asr_configuration=None):
         self.store, self.settings, self.extractor = store, settings, extractor
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="research-task")
         self.stop = threading.Event()
         self.probe_lock = threading.Lock()
+        from app.asr.configuration import ASRConfiguration
+        self.asr_configuration = asr_configuration or ASRConfiguration(settings)
+
+    def automatic_asr(self):
+        config = self.asr_configuration.public()
+        return config['configured'] and config['provider'] == 'local'
 
     def inspect_cached_media(self, document_id):
         def needs_probe(document):
@@ -42,7 +48,8 @@ class Jobs:
                 self.store.supplement_media_metadata(document_id, document['media_path'], result)
             return self.store.document(document_id)
 
-    def submit(self, document_id, kind):
+    def submit(self, document_id, kind, *, local_only=False):
+        asr = None
         if kind == 'transcribe':
             document = self.store.document(document_id)
             if any(j['status'] in ('queued', 'running') for j in document['jobs']):
@@ -51,10 +58,15 @@ class Jobs:
                 raise ValueError('尚无已缓存媒体，请先完成下载或重新上传文件。')
             if document['segments']:
                 raise ValueError('已有转写内容，请继续校对；不会覆盖已保存的原文。')
-            if not self.settings.asr_ready():
-                raise ValueError('媒体已获取，待转写。本地 ASR 未配置，请配置模型并重启服务后再开始转写。')
+            asr = self.asr_configuration.public()
+            if local_only and asr['provider'] != 'local':
+                return None
+            if not asr['configured']:
+                if local_only:
+                    return None
+                raise ValueError('媒体已获取，待转写。请在运行配置中设置本地模型或独立 Qwen ASR 凭据。')
         job = self.store.create_job(document_id, kind)
-        self.pool.submit(self.run, job)
+        self.pool.submit(self.run, job, asr)
         return job
 
     def close(self):
@@ -92,8 +104,11 @@ class Jobs:
                 process.kill()
             process.wait()
             request.unlink(missing_ok=True)
+            output.unlink(missing_ok=True)
+            if payload.get('cache'):
+                (Path(payload['cache'])/'audio.wav').unlink(missing_ok=True)
 
-    def run(self, job):
+    def run(self, job, selected_asr=None):
         s, c = self.store, self.settings
         try:
             if self.stop.is_set():
@@ -121,8 +136,8 @@ class Jobs:
                 if document['segments']:
                     s.update_job(job['id'], 'succeeded', '媒体已获取，保留已有转写')
                     return
-                if not c.asr_ready():
-                    s.update_job(job['id'], 'succeeded', '媒体已获取，待转写（本地 ASR 未配置）')
+                if not self.automatic_asr():
+                    s.update_job(job['id'], 'succeeded', '媒体已获取，待转写（请配置 ASR；云服务需手动开始）')
                     return
                 if self.stop.is_set():
                     raise ValueError('任务已中断，缓存已保留，可重试转写。')
@@ -138,21 +153,26 @@ class Jobs:
                                        (next_id, document['id'], '媒体已获取，等待本地转写', timestamp, timestamp))
                 # Continue on the same serialized worker; no executor-submission
                 # race with shutdown, and retry keeps the distinct ASR job kind.
-                self.run(s.job(next_id))
+                self.run(s.job(next_id), {'provider':'local'})
                 if s.job(next_id)['status'] == 'queued':
                     s.update_job(next_id, 'interrupted', '任务中断', '转写未开始，缓存已保留，可重试。')
                 return
             elif job['kind'] == 'transcribe':
-                if not c.asr_ready():
-                    raise ValueError("本地 ASR 未配置：请设置 ASR_MODEL_PATH 为已下载的模型目录；可先导入字幕或文本。")
+                asr = self.asr_configuration.public()
+                if not asr['configured'] or any(asr.get(k) != v for k,v in (selected_asr or {}).items()):
+                    raise ValueError('ASR 配置已变化或不可用。请核对设置后，使用缓存重新开始转写。')
                 path = document["media_path"]
                 if not path or not Path(path).is_file():
                     raise ValueError('缓存媒体不存在，请重新导入资料；转写重试不会重新下载。')
-                s.update_job(job["id"], "running", "本地语音转写中")
-                segments = self.worker(job, {"operation": "asr", "path": path,
-                                            "settings": {"asr_model": c.asr_model, "asr_device": c.asr_device,
+                s.update_job(job["id"], "running", f"语音转写中：{asr['provider']} / {asr['model'] if asr['provider']=='qwen' else asr['local_model']}")
+                result = self.worker(job, {"operation": "asr", "path": path, 'title':document['title'],
+                                            'asr_selection':{k:asr[k] for k in ('provider','model','region','workspace_id','cloud_enabled','finance_vocabulary','hotwords','topic')},
+                                            'cache':str(c.data_dir/'asr-cache'/document['id']),
+                                            "settings": {'data_dir':str(c.data_dir), "asr_model": c.asr_model, "asr_device": c.asr_device,
                                                          "asr_compute_type": c.asr_compute_type, "max_duration_seconds": c.max_duration_seconds}})
-                s.set_transcript(document["id"], segments)
+                s.set_transcript(document["id"], result['segments'] if isinstance(result,dict) else result,
+                                 result.get('metadata') if isinstance(result,dict) else None,
+                                 result.get('raw') if isinstance(result,dict) else None)
             else:
                 raise ValueError('不支持的任务类型')
             s.update_job(job["id"], "succeeded", "处理完成")

@@ -24,7 +24,19 @@ def main():
                       'size_bytes': size, 'extension': path.suffix.lstrip('.'), 'probe_status': 'ready'}
         else:
             from app.adapters.asr import ASR
-            result = ASR(Settings(**request["settings"])).transcribe(Path(request["path"]))
+            from app.asr.configuration import ASRConfiguration
+            settings = Settings(**request['settings'])
+            settings.data_dir = Path(settings.data_dir)
+            config = ASRConfiguration(settings).current()
+            selected = request.get('asr_selection', {'provider':'local'})
+            if any(config.get(k) != v for k,v in selected.items()):
+                raise ValueError('ASR 配置已变化，请核对设置后使用缓存重试。')
+            if config['provider'] == 'qwen':
+                from app.adapters.qwen_asr import QwenASR
+                result = QwenASR(config, Path(request['cache']), duration=settings.max_duration_seconds).transcribe(Path(request['path']), request.get('title',''))
+            else:
+                segments = ASR(settings).transcribe(Path(request['path']), request.get('title',''), config)
+                result = {'segments':segments, 'metadata':{'provider':'local','model':Path(settings.asr_model).name}, 'raw':{'segments':segments}}
         response = {"ok": True, "result": result}
     except Exception as exc:
         if request['operation'] == 'download':
@@ -33,7 +45,7 @@ def main():
         elif request['operation'] == 'probe':
             message = '无法确认媒体类型或时长，请保存缓存文件用本地播放器打开，或转换后重新上传。'
         else:
-            message = '本地转写失败：请检查模型文件、媒体音轨、时长与CPU/GPU运行环境；缓存已保留，可重试或改用字幕。'
+            message = str(exc) if isinstance(exc, ValueError) and str(exc).startswith(('Qwen','云','ASR','请先','上次','媒体中','无法确认','音轨')) else '语音转写失败：请检查独立ASR配置、媒体音轨、时长与运行环境；缓存已保留，可重试或改用字幕。'
         response = {"ok": False, "error": message}
     output.write_text(json.dumps(response, ensure_ascii=False), encoding="utf-8")
 

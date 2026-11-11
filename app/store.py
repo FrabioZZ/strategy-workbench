@@ -44,6 +44,9 @@ class Store:
             columns = {r['name'] for r in c.execute('PRAGMA table_info(documents)')}
             if 'media_metadata' not in columns:
                 c.execute("ALTER TABLE documents ADD COLUMN media_metadata TEXT NOT NULL DEFAULT '{}'")
+            for column, declaration in (('parent_document_id','TEXT'), ('asr_metadata',"TEXT NOT NULL DEFAULT '{}'"), ('original_segments',"TEXT NOT NULL DEFAULT '[]'"), ('asr_raw',"TEXT NOT NULL DEFAULT '{}'")):
+                if column not in columns:
+                    c.execute(f'ALTER TABLE documents ADD COLUMN {column} {declaration}')
             strategy_columns = {r['name'] for r in c.execute('PRAGMA table_info(strategies)')}
             for column in ('corrected_transcript', 'ai_review'):
                 if column not in strategy_columns:
@@ -69,6 +72,8 @@ class Store:
             result = dict(row)
             result["segments"] = json.loads(result["segments"])
             result['media_metadata'] = json.loads(result['media_metadata'])
+            for column in ('asr_metadata','original_segments','asr_raw'):
+                result[column] = json.loads(result[column])
             result['has_media'] = bool(result['media_path'] and Path(result['media_path']).is_file())
             result["is_demo"] = bool(result["is_demo"])
             jobs = c.execute("SELECT * FROM jobs WHERE document_id=? ORDER BY created_at DESC", (ident,)).fetchall()
@@ -116,9 +121,26 @@ class Store:
             if metadata and metadata.get('title'):
                 c.execute("UPDATE documents SET title=? WHERE id=? AND title='视频资料'", (metadata['title'][:120], ident))
 
-    def set_transcript(self, ident, segments):
+    def set_transcript(self, ident, segments, metadata=None, raw=None):
         with self.connect() as c:
-            c.execute("UPDATE documents SET segments=?,revision=revision+1,updated_at=? WHERE id=?", (json.dumps(segments, ensure_ascii=False), now(), ident))
+            c.execute('BEGIN IMMEDIATE')
+            row = c.execute('SELECT segments FROM documents WHERE id=?',(ident,)).fetchone()
+            if not row or json.loads(row['segments']): raise ValueError('已有原文，必须创建副本重转写')
+            c.execute("UPDATE documents SET segments=?,original_segments=?,asr_metadata=?,asr_raw=?,revision=revision+1,updated_at=? WHERE id=?", (json.dumps(segments, ensure_ascii=False),json.dumps(segments,ensure_ascii=False),json.dumps(metadata or {},ensure_ascii=False),json.dumps(raw or {},ensure_ascii=False), now(), ident))
+
+    def retranscription_copy(self, ident):
+        source = self.document(ident)
+        if not source['has_media']: raise ValueError('没有可复用的媒体缓存，请重新上传')
+        if any(j['status'] in ('running','queued') for j in source['jobs']): raise ValueError('请等待当前任务完成再创建副本')
+        copy_id, timestamp = uuid.uuid4().hex, now()
+        title = source['title'][:114]+' · 重转写'
+        with self.connect() as c:
+            c.execute('''INSERT INTO documents
+                (id,title,source_type,source_url,media_path,is_demo,created_at,updated_at,parent_document_id,media_metadata)
+                VALUES (?,?,?,?,?,?,?,?,?,?)''',
+                (copy_id,title,source['source_type'],source['source_url'],source['media_path'],int(source['is_demo']),
+                 timestamp,timestamp,ident,json.dumps(source['media_metadata'],ensure_ascii=False)))
+        return self.document(copy_id)
 
     def supplement_media_metadata(self, ident, media_path, metadata):
         # Recovery changes metadata only; preserve all original user work and timestamps.

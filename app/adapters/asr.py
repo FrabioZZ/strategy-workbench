@@ -6,13 +6,13 @@ class ASR:
     def __init__(self, settings):
         self.settings = settings
 
-    def transcribe(self, path):
+    def transcribe(self, path, title='', config=None):
         if not self.settings.asr_ready():
             raise ValueError("本地 ASR 未配置：请设置 ASR_MODEL_PATH 指向已下载的 faster-whisper 模型目录，或导入字幕/文本。")
-        return transcribe_in_worker(path, self.settings)
+        return transcribe_in_worker(path, self.settings, title, config)
 
 
-def transcribe_in_worker(path: Path, settings):
+def transcribe_in_worker(path: Path, settings, title='', config=None):
     # Never download a model implicitly. PyAV decodes audio without a system ffmpeg.
     import av
     from faster_whisper import WhisperModel
@@ -25,7 +25,9 @@ def transcribe_in_worker(path: Path, settings):
             raise ValueError("媒体时长超过120分钟，请拆分后上传")
     model = WhisperModel(settings.asr_model, device=settings.asr_device,
                          compute_type=settings.asr_compute_type, local_files_only=True)
-    chunks, _ = model.transcribe(str(path), language="zh", beam_size=5, vad_filter=True)
+    from app.asr.configuration import context_text, vocabulary
+    options = {} if config is None else dict(initial_prompt=context_text(config, title), hotwords=' '.join(vocabulary(config)))
+    chunks, _ = model.transcribe(str(path), language="zh", beam_size=5, vad_filter=True, **options)
     segments = []
     total = 0
     for chunk in chunks:

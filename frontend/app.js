@@ -33,8 +33,9 @@ async function api(path, options={}) {
 async function action(fn) {try {await fn();} catch (error) {notify(error.message, true);}}
 async function refreshConfig() {
   state.config = await api('/api/status'); const c=state.config;
-  $('#configuration-status').innerHTML = `<div class="config-row"><strong>本地语音转写</strong><span class="${c.asr_configured?'':'not-ready'}">${esc(c.asr_note)}</span></div><div class="config-row"><strong>策略提取</strong><span class="${c.ai_configured?'':'not-ready'}">${esc(c.ai_note)}</span></div>`;
-  $('#asr-import-hint').textContent = `${c.asr_configured ? "本地转写已就绪" : "语音转写未配置，请先打开运行配置"}。上限 ${c.max_upload_mb} MB / ${c.max_duration_minutes} 分钟。`;
+  $('#configuration-status').innerHTML = `<div class="config-row"><strong>语音转写</strong><span class="${c.asr_configured?'':'not-ready'}">${esc(c.asr_note)}</span></div><div class="config-row"><strong>策略提取</strong><span class="${c.ai_configured?'':'not-ready'}">${esc(c.ai_note)}</span></div>`;
+  $('#asr-import-hint').textContent = `${c.asr_configured ? `转写服务已配置：${c.asr_provider || 'local'} / ${c.asr_model || 'faster-whisper'}` : "语音转写未配置，请先打开运行配置"}。上限 ${c.max_upload_mb} MB / ${c.max_duration_minutes} 分钟。`;
+  updateImportButton();
   if(state.current) updateButtons();
   $('#ai-hint').textContent = c.ai_configured ? `提取使用 ${c.ai_provider || '已配置服务'} / ${c.ai_model}，转写内容将发送到该服务。` : 'AI 尚未配置。请在“运行配置”中选择服务和模型；转写与校对可先完成。';
 }
@@ -65,7 +66,7 @@ function renderDocument() {
   $('#transcription-state').className=`transcription-state${complete?' complete':''}`;
   $('#transcription-icon').textContent=complete?'✓':mediaJob?'…':'○';
   $('#transcript-title').textContent=mediaJob?(mediaJob.kind==='download'?'正在获取媒体':'正在识别'):complete?(['text','subtitle'].includes(d.source_type)?'原文已就绪':'转写完成'):d.has_media?(!state.config?.asr_configured?'待配置语音转写':'转写尚未完成'):'等待获取媒体';
-  $('#transcript-summary').textContent=complete?'可以提取策略，或展开原文校对。':mediaJob?'处理中，完成后可提取策略。':d.has_media?'已保留本机缓存，可继续转写，无需重新下载。':'导入的媒体获取成功后，将自动接续本地语音转写。';
+  $('#transcript-summary').textContent=complete?'可以提取策略，或展开原文校对。':mediaJob?'处理中，完成后可提取策略。':d.has_media?'已保留本机缓存，可继续转写，无需重新下载。':'导入的媒体获取成功后，将本地模式自动接续转写；云模式需手动开始。';
   const review=$('#transcript-review');
   if(review.dataset.document!==d.id){review.open=false;review.dataset.document=d.id;}
   review.hidden=!d.segments.length;
@@ -95,7 +96,7 @@ function updateButtons() {
   $('#add-segment').disabled=busy;
   $('#transcribe').disabled=busy || !state.current?.has_media || !state.config?.asr_configured || !!state.current?.segments.length;
   $('#transcribe').textContent=state.current?.media_status==='transcription_failed'?'重试缓存转写':'开始转写';
-  $('#transcribe-hint').textContent=state.config?.asr_configured?'使用本机缓存转写，无需重新下载。':'媒体已保存在本机。请配置本地 ASR 模型并重启服务，再点击开始转写；AI 仅在提取策略时需要。';
+  $('#transcribe-hint').textContent=state.config?.asr_configured?(state.config.asr_provider==='qwen'?`使用 Qwen / ${state.config.asr_model}，联网并上传缓存音频与上下文，按 Token 计费。重试优先继续查询已有任务。`:'使用本机缓存转写，无需重新下载。'):'媒体已保存在本机。请在运行配置中选择 ASR 语音服务；本地模型或独立 Qwen 凭据配置后可继续转写。';
   $('#save-state').textContent=state.dirty?'有未保存的修改':'已保存到本机';
   document.querySelectorAll('[data-evidence]').forEach(el=>el.disabled=state.dirty || state.current?.strategy_stale);
   document.querySelectorAll('#segments textarea,#segments input,#segments button').forEach(el=>el.disabled=busy);
@@ -104,7 +105,7 @@ function renderJob() {
   const j=activeJob(state.current)||state.current?.jobs[0], el=$('#job-status');
   if(!j || j.status==='succeeded') {el.hidden=true;return;}
   el.hidden=false;const busy=['queued','running'].includes(j.status);el.className=busy?'running':'failed';
-  const message=busy?(j.kind==='transcribe'?'识别中，请保持程序打开并保持设备唤醒。':j.kind==='download'?'正在获取媒体，完成后自动接续转写。请保持程序打开并保持设备唤醒。':'正在处理策略，请保持程序打开并保持设备唤醒。'):(j.error||'任务未完成，请重试。');
+  const message=busy?(j.kind==='transcribe'?'识别中，请保持程序打开并保持设备唤醒。':j.kind==='download'?'正在获取媒体。本地模式自动接续，云模式需手动开始。请保持程序打开并保持设备唤醒。':'正在处理策略，请保持程序打开并保持设备唤醒。'):(j.error||'任务未完成，请重试。');
   el.innerHTML=`<div class="job-heading"><strong>${esc(j.stage)}</strong>${busy?'':`<button class="secondary" data-retry="${esc(j.id)}" ${j.kind==='transcribe'&&!state.config?.asr_configured?'disabled':''}>${j.kind==='download'?'重试获取并转写':j.kind==='transcribe'?'重试缓存转写':'重试提取'}</button>`}</div><p>${esc(message)}</p>${busy?'<div class="indeterminate-progress" role="progressbar" aria-label="正在处理，进度暂不可确定"><span></span></div>':''}`;
 }
 function evidenceMarkup(evidence) {return evidence.map(e=>{const corrected=e.transcript_version==='corrected';return `<div class="evidence"><button type="button" data-evidence="${esc(e.segment_id)}" data-transcript-version="${corrected?'corrected':'original'}" data-time="${e.start??''}">↗ ${esc(timeLabel(e.start))} · ${corrected?'校正版依据 · 对照原始段落':'查看原始段落'} ${esc(e.segment_id.slice(1))}</button><blockquote>“${esc(e.quote)}”</blockquote></div>`;}).join('');}
@@ -148,7 +149,10 @@ function switchTab(name) {
   state.tab=name;
   document.querySelectorAll('[data-tab]').forEach(b=>{b.setAttribute('aria-selected',String(b.dataset.tab===name));b.tabIndex=b.dataset.tab===name?0:-1;});
   ['upload','url','text'].forEach(n=>$(`#panel-${n}`).hidden=n!==name);
-  $('#import-submit').textContent=name==='text'?'导入文本':name==='url'?'导入并自动转写':'导入文件';
+  updateImportButton();
+}
+function updateImportButton(){
+  $('#import-submit').textContent=state.tab==='text'?'导入文本':state.tab==='url'?(state.config?.asr_provider==='qwen'?'获取媒体':'导入并自动转写'):'导入文件';
 }
 document.querySelectorAll('[data-tab]').forEach(b=>{b.addEventListener('click',()=>switchTab(b.dataset.tab));b.addEventListener('keydown',e=>{if(['ArrowRight','ArrowLeft','Home','End'].includes(e.key)){e.preventDefault();const tabs=['upload','url','text'];let i=tabs.indexOf(state.tab);i=e.key==='Home'?0:e.key==='End'?2:(i+(e.key==='ArrowRight'?1:2))%3;switchTab(tabs[i]);$(`#tab-${tabs[i]}`).focus();}});});
 $('#new-document').addEventListener('click',()=>{if(!allowLeave())return;state.current=null;state.dirty=false;rememberDocument(null);syncWakeLock();clearTimeout(state.timer);$('#document-view').hidden=true;$('#import-view').hidden=false;$('#notice').hidden=true;renderLibrary();$('#import-name').focus();});

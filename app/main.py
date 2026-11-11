@@ -12,6 +12,7 @@ from starlette.concurrency import run_in_threadpool
 from app.adapters.download import extract_shared_url
 from app.adapters.extractor import Extractor
 from app.ai.configuration import AIConfiguration
+from app.asr.configuration import ASRConfiguration, ASRConfigInput
 from app.ai.router import router as ai_router
 from app.config import Settings, ROOT
 from app.jobs import Jobs
@@ -30,7 +31,7 @@ from app.trading.quote_router import router as quote_router
 
 
 def public_document(document):
-    return {k: v for k, v in document.items() if k != "media_path"}
+    return {k: v for k, v in document.items() if k not in ('media_path', 'asr_raw')}
 
 
 class BodyLimitMiddleware:
@@ -58,6 +59,7 @@ def create_app(settings=None, extractor=None):
     config.data_dir = Path(config.data_dir).resolve()
     store = Store(config.data_dir)
     ai_configuration = AIConfiguration(config)
+    asr_configuration = ASRConfiguration(config)
     trading_store = TradingStore(config.data_dir)
     trading_service = TradingService(trading_store, store)
     external_paper = PaperService(trading_store, store)
@@ -68,7 +70,7 @@ def create_app(settings=None, extractor=None):
     async def lifespan(app):
         store.init()
         store.recover()
-        app.state.jobs = Jobs(store, config, extractor or Extractor(ai_configuration))
+        app.state.jobs = Jobs(store, config, extractor or Extractor(ai_configuration), asr_configuration)
         trading_store.init()
         external_paper.recover()
         app.state.paper_worker = PaperWorker(trading_service)
@@ -83,6 +85,7 @@ def create_app(settings=None, extractor=None):
     app = FastAPI(title="策略拾录", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.store, app.state.settings = store, config
     app.state.ai_configuration = ai_configuration
+    app.state.asr_configuration = asr_configuration
     app.state.trading_service = trading_service
     app.state.external_paper = external_paper
     app.state.quotes, app.state.quote_accounts = quotes, quote_accounts
@@ -125,7 +128,23 @@ def create_app(settings=None, extractor=None):
         public.update(ai_configured=ai['configured'], ai_provider=ai['provider'] or None,
                       ai_model=ai['model'] or None,
                       ai_note='配置已填写，连接尚未验证' if ai['configured'] else ai['storage_note'])
+        asr = asr_configuration.public()
+        public.update(asr_configured=asr['configured'], asr_provider=asr['provider'],asr_model=asr['model'] if asr['provider']=='qwen' else asr['local_model'],asr_note=asr['note'])
         return public
+
+    @app.get('/api/asr/config')
+    def asr_config():
+        return asr_configuration.public()
+
+    @app.put('/api/asr/config')
+    def save_asr_config(body: ASRConfigInput):
+        try: return asr_configuration.save(body)
+        except ValueError as exc: raise HTTPException(400, str(exc)) from None
+
+    @app.post('/api/documents/{ident}/retranscribe-copy', status_code=201)
+    def retranscribe_copy(ident: str):
+        try: return public_document(store.retranscription_copy(ident))
+        except ValueError as exc: raise HTTPException(409,str(exc)) from None
 
     @app.get("/api/documents")
     def documents():
@@ -180,8 +199,7 @@ def create_app(settings=None, extractor=None):
             else:
                 document = store.create_document(title, "upload", media_path=str(path))
                 await run_in_threadpool(app.state.jobs.inspect_cached_media, document['id'])
-                if config.asr_ready():
-                    app.state.jobs.submit(document["id"], "transcribe")
+                app.state.jobs.submit(document['id'], 'transcribe', local_only=True)
             return public_document(store.document(document["id"]))
         except Exception:
             path.unlink(missing_ok=True)
@@ -241,6 +259,8 @@ def create_app(settings=None, extractor=None):
         payload = {"schema_version": "1.0", "document_id": ident, "title": document["title"],
                    "source_type": document["source_type"], "source_url": document["source_url"],
                    "media_metadata": document['media_metadata'],
+                   'parent_document_id':document['parent_document_id'], 'asr_metadata':document['asr_metadata'],
+                   'original_asr_transcript':document['original_segments'],
                    "is_demo": document["is_demo"], "transcript_revision": document["revision"],
                    "transcript": document["segments"], "strategy": document["strategy"],
                    "corrected_transcript": document['corrected_segments'], "ai_review": document['ai_review'],
