@@ -5,7 +5,7 @@ import json
 import pytest
 
 from app.ai.mapping import validate_proposal
-from test_ai_backend import model_transport, settings, poll
+from test_ai_backend import model_transport, settings, poll, source_fixture
 
 
 def conditional_fixture(buy='RSI(14)小于30时买入', sell='收盘价低于5日均线时全部卖出'):
@@ -44,6 +44,67 @@ def test_common_comparison_wording_has_identical_daily_semantics(buy):
     assert rules is not None, questions
 
 
+@pytest.mark.parametrize('timeframe', ['日线', '日线周期'])
+def test_spoken_ma_crossover_and_stop_loss_keep_corrected_citations(timeframe):
+    buy = '收盘价向上突破二十日均线就买。'
+    sell = '当收盘价跌破二十天均线，就清仓。'
+    stop = '以入场信号收盘价为基准，日线收盘下跌百分之五就止损。'
+    position = '目标仓位为百分之二十五。'
+    source, proposal = conditional_fixture(buy, sell)
+    source['corrected_transcript'] = copy.deepcopy(source['transcript'])
+    context = '沪市主板股票，我们在日线周期观察。'
+    source['corrected_transcript'][0]['text'] = context
+    source['strategy']['timeframe']['value'] = timeframe
+    for field in ('asset', 'timeframe'):
+        source['strategy'][field]['evidence'][0]['quote'] = context
+    source['corrected_transcript'][3]['text'] = position
+    source['corrected_transcript'].append({'id': 's6', 'text': stop})
+    source['transcript'][1]['text'] = '收盘架向上突破二十日军线就买。'
+    source['evidence_transcript_version'] = 'corrected'
+    source['strategy']['rules'][2].update(text=position, evidence=[{'segment_id': 's4', 'quote': position}])
+    source['strategy']['rules'].append({'kind': 'stop_loss', 'text': stop,
+                                        'evidence': [{'segment_id': 's6', 'quote': stop}]})
+    proposal['evidence'][2]['quote'] = position
+    proposal['evidence'][3]['quote'] = '我们在日线周期观察'
+    proposal['evidence'].append({'field': 'stop_loss_pct', 'segment_id': 's6', 'quote': stop})
+    proposal['rules'].update(
+        buy={'op': 'cross_above', 'left': {'indicator': 'CLOSE'},
+             'right': {'indicator': 'MA', 'params': {'period': 20}}},
+        sell={'op': 'cross_below', 'left': {'indicator': 'CLOSE'},
+              'right': {'indicator': 'MA', 'params': {'period': 20}}},
+        stop_loss_pct=5,
+    )
+
+    rules, _, questions, evidence = validate_proposal(proposal, source)
+
+    assert rules is not None, questions
+    assert rules['buy']['op'] == 'cross_above' and rules['sell']['op'] == 'cross_below'
+    assert rules['buy']['right']['params']['period'] == 20
+    assert rules['target_pct'] == 25 and rules['stop_loss_pct'] == 5
+    assert evidence == [{**ref, 'transcript_version': 'corrected'} for ref in proposal['evidence']]
+
+
+@pytest.mark.parametrize('buy', ['股价站上二十日均线就买', '收盘价站上二十日均线就买'])
+def test_spoken_ma_phrase_with_ambiguous_cross_is_unresolved(buy):
+    source, proposal = conditional_fixture(buy=buy)
+    proposal['rules']['buy'] = {'op': 'cross_above', 'left': {'indicator': 'CLOSE'},
+                                'right': {'indicator': 'MA', 'params': {'period': 20}}}
+    rules, _, questions, _ = validate_proposal(proposal, source)
+    assert rules is None and questions
+
+
+def test_spoken_stop_loss_without_basis_is_unresolved():
+    source, proposal = conditional_fixture()
+    text = '跌破百分之五止损'
+    source['transcript'].append({'id': 's6', 'text': text})
+    source['strategy']['rules'].append({'kind': 'stop_loss', 'text': text,
+                                        'evidence': [{'segment_id': 's6', 'quote': text}]})
+    proposal['evidence'].append({'field': 'stop_loss_pct', 'segment_id': 's6', 'quote': text})
+    proposal['rules']['stop_loss_pct'] = 5
+    rules, _, questions, _ = validate_proposal(proposal, source)
+    assert rules is None and questions
+
+
 @pytest.mark.parametrize('bad', ['indicator', 'parameter', 'direction', 'incomplete', 'position', 'unproved', 'minute', 'omitted', 'implicit_period'])
 def test_unknown_incomplete_or_invented_conditions_cannot_become_ready(bad):
     source, proposal = conditional_fixture()
@@ -74,9 +135,9 @@ def test_first_limit_up_confirmation_is_daily_and_requires_both_conditions():
     assert validate_proposal(proposal, source)[0] is None
 
 
-def test_mapper_receives_live_capabilities_and_always_requires_confirmation(tmp_path, monkeypatch):
+def test_legacy_model_mapper_receives_live_capabilities_and_always_requires_confirmation(tmp_path, monkeypatch):
     from app.ai.mapping import map_strategy
-    source, proposal = conditional_fixture()
+    source, proposal = source_fixture()
     requests = model_transport(monkeypatch, [proposal])
     result = map_strategy(settings(tmp_path), source)
     assert result['ready'] and result['confirmed'] is False, result

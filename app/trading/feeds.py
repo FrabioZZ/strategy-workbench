@@ -12,11 +12,16 @@ def configured():
     return bool(os.getenv('TUSHARE_TOKEN','').strip())
 
 
-def fetch(symbol):
+def fetch(symbol, start_date=None, end_date=None):
     token=os.getenv('TUSHARE_TOKEN','').strip()
-    if not token: raise ValueError('未配置TUSHARE_TOKEN，等待导入增量CSV')
+    if not token:
+        if start_date or end_date:
+            raise ValueError('缺少覆盖所选区间的历史日线行情。请配置服务端 TUSHARE_TOKEN，'
+                             '或在回测工作区导入覆盖该区间的未复权日线 CSV。')
+        raise ValueError('未配置TUSHARE_TOKEN，等待导入增量CSV')
     end=completed_date(); start=end-timedelta(days=550)
-    params=dict(ts_code=symbol,start_date=start.strftime('%Y%m%d'),end_date=end.strftime('%Y%m%d'))
+    params=dict(ts_code=symbol, start_date=start_date.replace('-', '') if start_date else start.strftime('%Y%m%d'),
+                end_date=end_date.replace('-', '') if end_date else end.strftime('%Y%m%d'))
     def call(name, fields):
         # Never forward vendor errors: they may echo request credentials.
         try:

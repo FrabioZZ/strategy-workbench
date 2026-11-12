@@ -14,14 +14,14 @@ def indicator_capabilities():
                 rule_schema=models.Conditional.model_json_schema())
 
 
-def router(service):
+def router(service, *, sample_only=False):
     api=APIRouter(prefix='/api/trading',tags=['trading'])
     store=service.store; sources=service.sources
     @api.get('/capabilities')
     def capabilities():
         return dict(market='CN_A_MAIN',frequency='daily',supported_symbols='沪深主板普通股票（非ST、非上市初期），单标的运行',
                     rule_types=['ma','threshold','conditional'],broker=dict(connected=False,label='未接入券商，仅本地模拟撮合'),
-                    feeds=dict(csv=True,tushare_configured=feeds.configured(),tushare_verified=False),limitations=datasets.LIMITATIONS,
+                    feeds=dict(csv=True,tushare_configured=not sample_only and feeds.configured(),tushare_verified=False),limitations=datasets.LIMITATIONS,
                     research=dict(dataset_type='research_adjusted',market='CN_A',price_basis='forward_adjusted',
                                   allowed_modes=['backtest'],quantity_unit='synthetic_unit',limitations=research.LIMITATIONS),
                     indicators=registry(),condition_operators=OPERATORS,rule_schema=models.Conditional.model_json_schema(),

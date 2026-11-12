@@ -41,9 +41,17 @@
     if(!area){area=document.createElement('div');area.id='asr-document-info';document.querySelector('#transcription-state').after(area);}
     const m=d.asr_metadata||{};
     const canCopy=d.has_media && !activeJob(d) && (d.segments.length || d.media_status==='transcription_failed');
-    area.innerHTML=`${m.provider?`<p class="helper">识别服务：${esc(m.provider)} / ${esc(m.model)} ${esc(m.region||'')} · 原始识别与时间戳已保留</p>`:''}${d.parent_document_id?`<p>重转写副本 · <button class="quiet" type="button" id="asr-parent">查看父来源资料</button></p>`:''}${canCopy?'<button class="secondary" type="button" id="asr-copy">创建副本重新转写</button><p class="helper">复用媒体缓存，保留原资料和策略证据；副本创建后手动开始转写。</p>':''}`;
+    const parent = d.parent_document_deleted || deletedDocumentIds.has(d.parent_document_id)
+      ? '父来源资料已删除'
+      : '<button class="quiet" type="button" id="asr-parent">查看父来源资料</button>';
+    area.innerHTML=`${m.provider?`<p class="helper">识别服务：${esc(m.provider)} / ${esc(m.model)} ${esc(m.region||'')} · 原始识别与时间戳已保留</p>`:''}${d.parent_document_id?`<p>重转写副本 · ${parent}</p>`:''}${canCopy?'<button class="secondary" type="button" id="asr-copy">创建副本重新转写</button><p class="helper">复用媒体缓存，保留原资料和策略证据；副本创建后手动开始转写。</p>':''}`;
     document.querySelector('#asr-parent')?.addEventListener('click',()=>action(()=>selectDocument(d.parent_document_id)));
     document.querySelector('#asr-copy')?.addEventListener('click',()=>action(async()=>{if(!allowLeave())return;const copy=await api(`/api/documents/${d.id}/retranscribe-copy`,{method:'POST'});await refreshLibrary();await selectDocument(copy.id,false);}));
+  });
+  document.addEventListener('library-document-deleted', e => {
+    if (state.current?.parent_document_id === e.detail) {
+      document.querySelector('#asr-parent')?.replaceWith('父来源资料已删除');
+    }
   });
   action(load);
 })();

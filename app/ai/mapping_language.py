@@ -1,5 +1,49 @@
-"""Small, positive grammar for narration that supplies no trading conditions."""
+"""Recognize bounded spoken expressions while retaining the original citations."""
 import re
+
+
+NUMBER = r'-?\d+(?:\.\d+)?'
+_DIGITS = {char: value for value, char in enumerate('零一二三四五六七八九')}
+_DIGITS['两'] = 2
+_CHINESE_NUMBER = r'[零一二两三四五六七八九十百]{1,5}(?:点[零一二三四五六七八九]{1,6})?'
+_MA_PERIOD = re.compile(rf'({_CHINESE_NUMBER}|\d+)(?:天|日)(?=(?:简单|指数)?均线)')
+_PERCENTAGE = re.compile(rf'百分之({NUMBER}|{_CHINESE_NUMBER})')
+STOP_BASIS = '以入场信号收盘价为基准'
+
+
+def _spoken_number(text: str) -> str:
+    if re.fullmatch(NUMBER, text):
+        return text
+    integer, separator, fraction = text.partition('点')
+    match = re.fullmatch(r'(?:(?P<hundreds>[一二两三四五六七八九])百)?'
+                         r'(?:(?P<tens>[一二三四五六七八九])?十|(?P<zero>零)(?=.))?'
+                         r'(?P<ones>[零一二两三四五六七八九])?', integer)
+    if not match:
+        return text
+    hundreds, tens, zero, ones = match.groups()
+    if (zero and (not hundreds or ones in (None, '零', '两'))
+            or hundreds and not tens and '十' in integer
+            or hundreds and ones and not zero and '十' not in integer
+            or '十' in integer and ones in ('零', '两')):
+        # In particular, do not interpret 一百五 as either 105 or 150.
+        return text
+    value = 100 * _DIGITS.get(hundreds, 0) + _DIGITS.get(ones, 0)
+    if '十' in integer:
+        value += 10 * _DIGITS.get(tens, 1)
+    decimal = ''.join(str(_DIGITS[digit]) for digit in fraction)
+    return f'{value}{separator}{decimal}'
+
+
+def normalize_rule_numbers(text: str) -> str:
+    """Normalize explicit MA periods and percentages for matching only."""
+    text = _MA_PERIOD.sub(lambda match: _spoken_number(match[1]) + '日', text)
+    return _PERCENTAGE.sub(lambda match: _spoken_number(match[1]) + '%', text)
+
+
+def is_timeframe_context(clause: str, timeframe: str) -> bool:
+    if not timeframe:
+        return False
+    return re.fullmatch(rf'(?:我|我们)?(?:在|用|按){re.escape(timeframe)}(?:周期|级别)?(?:观察|判断)', clause) is not None
 
 
 _AUDIENCE = r'(?:大家|各位(?:朋友)?|朋友们|同学们)'

@@ -23,6 +23,16 @@ class TradingStore:
         finally:
             c.close()
 
+    @contextmanager
+    def readonly_transaction(self):
+        uri = self.path.resolve().as_uri() + '?mode=ro'
+        c = sqlite3.connect(uri, uri=True, timeout=15)
+        c.row_factory = sqlite3.Row
+        try:
+            yield c
+        finally:
+            c.close()
+
     def init(self):
         self.folder.mkdir(parents=True, exist_ok=True)
         with self.transaction() as c:

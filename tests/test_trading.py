@@ -65,6 +65,17 @@ def test_readiness_confirmation_weights_and_disabled(client):
     assert normalized['items'][0]['effective_weight'] == 100
 
 
+def test_portfolio_numbers_duplicate_strategy_names_and_preserves_existing_suffix(client):
+    items = [{'id': str(index), 'name': name, 'weight': 0} for index, name in enumerate(
+        ('均线', '均线', '均线 (2)', '均线'), start=1)]
+    saved = portfolio(client, items=items)
+    expected = ['均线', '均线 (3)', '均线 (2)', '均线 (4)']
+    assert [item['name'] for item in saved['items']] == expected
+    reopened = client.get(PREFIX + '/portfolios/' + saved['id']).json()
+    assert [item['name'] for item in reopened['items']] == expected
+    assert [item['id'] for item in reopened['items']] == ['1', '2', '3', '4']
+
+
 def test_next_open_fees_cash_and_determinism(client):
     p, d = portfolio(client), dataset(client)
     payload = run_payload(p, d)
@@ -79,6 +90,65 @@ def test_next_open_fees_cash_and_determinism(client):
     assert a['positions'] == []
     b = client.post(PREFIX+'/backtests', json=payload).json()
     assert a['fills'] == b['fills'] and a['equity'] == b['equity']
+
+
+def test_conditional_stop_loss_matches_backtest_and_paper_without_ai(client):
+    rules = {
+        'type': 'conditional',
+        'buy': {'op': 'gt', 'left': {'indicator': 'CLOSE'},
+                'right': {'indicator': 'EMA', 'params': {'period': 2}}},
+        'sell': {'op': 'gt', 'left': {'indicator': 'CLOSE'}, 'right': {'value': 12}},
+        'target_pct': 50,
+        'stop_loss_pct': 5,
+    }
+    p = portfolio(client, items=[{'id': 'daily', 'name': '收盘止损',
+                                 'confirmed': True, 'mapping_note': '已核对', 'rules': rules}])
+    d = dataset(client, '2026-01-05,600000.SH,10,10,9.5,9.5,100000,10,11,9\n'
+                        '2026-01-06,600000.SH,10,10.4,10,10.4,100000,9.5,10.45,8.55\n'
+                        '2026-01-07,600000.SH,10.5,10.5,9.6,9.6,100000,10.4,11.44,9.36\n'
+                        '2026-01-08,600000.SH,9.7,9.8,9.5,9.6,100000,9.6,10.56,8.64\n')
+    assert not client.app.state.settings.ai_ready()
+    payload = run_payload(p, d)
+    response = client.post(PREFIX+'/backtests', json=payload)
+    assert response.status_code == 201, response.text
+    backtest = response.json()
+    assert [(f['side'], f['signal_date'], f['date'], f['price']) for f in backtest['fills']] == [
+        ('buy', '2026-01-06', '2026-01-07', 10.5),
+        ('sell', '2026-01-07', '2026-01-08', 9.7),
+    ]
+    assert [signal['target_pct'] for signal in backtest['signals']] == [0, 50, 0, 0]
+    response = client.post(PREFIX+'/paper/sessions', json={**payload, 'name': '回放', 'mode': 'replay'})
+    assert response.status_code == 201, response.text
+    url = PREFIX+'/paper/sessions/'+response.json()['id']
+    assert client.post(url+'/start').status_code == 200
+    for _ in range(5):
+        client.app.state.paper_worker.tick()
+    paper = client.get(url).json()
+    assert paper['feed_status'] == 'exhausted'
+    for key in ('signals', 'orders', 'fills', 'cash', 'positions', 'equity'):
+        assert paper[key] == backtest[key]
+
+
+@pytest.mark.parametrize('asset', ['600000.SH', ' 600000.sh '])
+def test_run_symbol_matches_explicit_source_ticker(client, asset):
+    source_store = client.app.state.store
+    doc = source_store.create_document('指定标的', 'text', segments=[{'id': 's1', 'text': asset}])
+    source_store.save_strategy(doc, {'title': '指定标的', 'asset': {'value': asset},
+                                     'rules': [{'kind': 'buy', 'text': '跌破10买入'}]}, 'test', 'test')
+    source = client.get(PREFIX+'/strategies').json()[0]
+    rules = {'type': 'threshold', 'buy_below': 10, 'sell_above': 11, 'target_pct': 100}
+    p = portfolio(client, items=[{'id': 'a', 'name': '指定标的', 'source_id': source['id'],
+                                 'confirmed': True, 'mapping_note': '已核对', 'rules': rules}])
+    assert p['readiness']['ready']
+    other = dataset(client, '2026-01-05,600001.SH,10,10,9,9.5,100000,10,11,9\n')
+    correct = dataset(client)
+    for path, fields in [('/backtests', {}), ('/paper/sessions', {'name': '回放', 'mode': 'replay'})]:
+        wrong_payload = {**run_payload(p, other), **fields, 'symbol': '600001.SH'}
+        response = client.post(PREFIX+path, json=wrong_payload)
+        assert response.status_code == 400, response.text
+        assert '600000.SH' in response.json()['detail']
+        response = client.post(PREFIX+path, json={**run_payload(p, correct), **fields})
+        assert response.status_code == 201, response.text
 
 
 def test_weight_changes_results_and_conflict_blocks(client):

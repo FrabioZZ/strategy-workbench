@@ -5,7 +5,8 @@
   <title>策略拾录 · 策略研究与模拟交易</title>
   <meta name="description" content="从资料提取策略，分析行情指标，运行回测与模拟交易，查看阶段盈亏。">
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/trading.css"><link rel="stylesheet" href="/static/paper-external.css"><script src="/static/app.js" defer></script><script src="/static/trading.js" defer></script><script src="/static/paper-external.js" defer></script>
+  <script src="/runtime-mode.js" defer></script>
+  <link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/trading.css"><link rel="stylesheet" href="/static/market-workstation.css"><link rel="stylesheet" href="/static/paper-external.css"><script src="/static/app.js" defer></script><script src="/static/market-workstation.js" defer></script><script src="/static/trading.js" defer></script><script src="/static/paper-external.js" defer></script>
   <link rel="stylesheet" href="/static/quotes.css"><script src="/static/quotes.js" defer></script>
   <link rel="stylesheet" href="/static/ai.css"><script src="/static/ai.js" defer></script><script src="/static/asr.js" defer></script>
   <link rel="stylesheet" href="/static/product.css">
@@ -22,9 +23,13 @@
     <nav id="library" aria-label="已保存资料"><p class="muted">正在加载资料…</p></nav>
     </div><div class="sidebar-footer">本地工作空间</div>
   </aside>
+  <div id="library-menu" role="menu" aria-label="资料操作" hidden>
+    <button id="delete-document" type="button" role="menuitem" tabindex="-1">删除资料</button>
+  </div>
   <div class="shell">
     <header class="topbar"><span>研究工作台 <span class="divider">/</span> <strong id="workspace-label">资料</strong></span><button id="settings-toggle" class="quiet" aria-expanded="false" aria-controls="settings">运行配置</button></header>
     <main id="main" tabindex="-1">
+      <p id="daily-demo-banner" class="info-box" hidden></p>
       <div id="notice" role="status" aria-live="polite" hidden></div>
       <section id="settings" class="settings" hidden aria-labelledby="settings-title">
         <div class="section-heading"><h2 id="settings-title">运行配置</h2><button id="refresh-status" class="quiet">刷新状态</button></div>
@@ -77,7 +82,7 @@
             <div class="panel-toolbar"><div><h2 id="strategy-title">策略草案</h2></div><button id="extract" class="primary">提取策略</button></div>
             <div id="ai-hint" class="helper strip"></div>
             <div id="strategy-content"><div class="empty-state"><span aria-hidden="true">引</span><h3>从原话形成有依据的草案</h3><p>转写完成后点击“提取策略”。这里将显示买卖条件、仓位、止损和对应原文依据。</p></div></div>
-            <div class="strategy-footer"><button id="export" class="secondary" disabled>导出策略 JSON</button></div>
+            <div class="strategy-footer"><button id="export" class="secondary" disabled>导出策略 JSON</button><button id="prepare-execution" type="button" class="secondary" hidden>生成执行规则 · 人工选口径</button><button id="complete-execution" type="button" class="primary" hidden>让 AI 补全并生成执行规则</button></div>
           </section>
         </div>
       </section>
@@ -95,7 +100,9 @@
         </div>
       </section>
       <section id="workspace-backtest" class="trading-workspace" data-workspace-panel hidden aria-labelledby="backtest-title">
-        <div class="work-heading"><div><h1 id="backtest-title" tabindex="-1">历史回测</h1><p>选择策略、标的和日期，查看阶段盈亏与收益率。</p></div></div>
+        <div class="work-heading"><div><h1 id="backtest-title" tabindex="-1">历史回测</h1></div></div>
+        <div id="market-backtest"></div>
+        <details class="market-advanced"><summary>高级行情与历史工具</summary>
         <label class="backtest-mode-label">回测方式<select id="backtest-mode"><option value="research">复权日线研究</option><option value="strict">未复权日线撮合</option></select></label>
         <p id="backtest-mode-help" class="helper"></p>
         <div id="backtest-strategy-guide" class="readiness" hidden><strong>先保存你的可执行策略组合</strong><p>回测使用你保存并确认的策略与版本。可以从教学资料提取规则，或自行编写手工策略。</p><a class="button-link" href="#portfolio">前往策略组合</a></div>
@@ -123,12 +130,19 @@
         <form id="backtest-form" class="run-form"><div class="form-grid"><label>已保存组合 / 版本<select id="backtest-portfolio" required></select></label><label>行情数据<select id="backtest-dataset" required></select></label><label>标的代码<input id="backtest-symbol" value="600000.SH" required></label><label>初始资金（元）<input id="backtest-cash" type="number" min="1" max="1000000000" value="100000" required></label></div><div id="backtest-costs"></div><div class="action-row"><button class="primary" type="submit">运行回测</button><span id="backtest-progress" role="status"></span></div></form>
         <div class="history-select"><label>历史运行<select id="backtest-history"><option value="">选择已完成的回测</option></select></label></div><div id="backtest-result" class="result-area"><p class="empty-copy">选择组合和数据后运行，查看盈亏、收益率与成交记录。</p></div>
         </div>
+        </details>
       </section>
       <section id="workspace-paper" class="trading-workspace" data-workspace-panel hidden aria-labelledby="paper-title">
-        <div class="work-heading"><div><h1 id="paper-title" tabindex="-1">模拟盘</h1><p>按策略模拟交易，跟踪账户盈亏。未接入券商实盘。</p></div><button id="paper-external-jump" class="secondary" type="button">独立引擎回放</button></div><div id="trading-capabilities" class="info-box">正在读取行情与券商接入状态…</div>
-        <details class="data-import" open><summary>新建模拟账户</summary><form id="paper-form"><div class="form-grid"><label>账户名称<input id="paper-name" value="我的本地模拟账户" required maxlength="100"></label><label>已保存组合 / 版本<select id="paper-portfolio" required></select></label><label>数据模式<select id="paper-mode"><option value="replay">历史回放（非实时）</option><option value="incremental">新行情（盘后日线）</option></select></label><label>行情接入口<select id="paper-feed"><option value="csv">手动导入 CSV</option><option value="tushare">Tushare 盘后日线</option></select></label><label>初始行情数据<select id="paper-dataset"></select></label><label>标的代码<input id="paper-symbol" value="600000.SH" required></label><label>初始资金（元）<input id="paper-cash" type="number" min="1" max="1000000000" value="100000" required></label><label>行情最长间隔（天）<input id="paper-age" type="number" min="1" max="10" value="4" required></label></div><p id="paper-mode-help" class="helper"></p><details class="inline-details"><summary>模拟运行规则</summary><p>新行情模式先用历史数据预热，再消费新鲜的已收盘日线。启动或恢复后须先观察有效行情；盘前观察可参与当天开盘，盘中或盘后不回填过去开盘，暂停期间不补成交。CSV 需手动更新。</p></details><div id="paper-costs"></div><button class="primary" type="submit">创建本地账户</button></form></details>
+        <div class="work-heading"><div><h1 id="paper-title" tabindex="-1">模拟盘</h1></div></div>
+        <div id="market-paper"></div>
+        <details id="paper-advanced" class="market-advanced"><summary>高级行情与历史工具</summary>
+        <div class="action-row"><button id="paper-external-jump" class="secondary" type="button">独立引擎回放</button></div><div id="trading-capabilities" class="info-box">正在读取行情与券商接入状态…</div>
+        <details class="data-import" open><summary>新建模拟账户</summary><form id="paper-form"><div class="form-grid"><label>账户名称<input id="paper-name" value="我的本地模拟账户" required maxlength="100"></label><label>已保存组合 / 版本<select id="paper-portfolio" required></select></label><label>数据模式<select id="paper-mode"><option value="replay">历史回放（非实时）</option><option value="incremental">新行情（盘后日线）</option></select></label><label>行情接入口<select id="paper-feed"><option value="csv">手动导入 CSV</option><option value="tushare">Tushare 盘后日线</option></select></label><label>初始行情数据<select id="paper-dataset"></select></label><label>标的代码<input id="paper-symbol" value="600000.SH" required></label><label>初始资金（元）<input id="paper-cash" type="number" min="1" max="1000000000" value="100000" required></label><label>行情最长间隔（天）<input id="paper-age" type="number" min="1" max="10" value="4" required></label></div>
+        <p id="paper-mode-help" class="helper"></p><button id="paper-demo-dataset" class="secondary" type="button">载入演示行情</button>
+        <details class="inline-details"><summary>模拟运行规则</summary><p>新行情模式先用历史数据预热，再消费新鲜的已收盘日线。启动或恢复后须先观察有效行情；盘前观察可参与当天开盘，盘中或盘后不回填过去开盘，暂停期间不补成交。CSV 需手动更新。</p></details><div id="paper-costs"></div><button class="primary" type="submit">创建本地账户</button></form></details>
         <div class="history-select"><label>模拟账户<select id="paper-history"><option value="">选择模拟账户</option></select></label><button id="refresh-paper" class="secondary">刷新状态</button></div>
         <div id="paper-controls" hidden><div class="action-row"><button id="paper-start" class="primary">启动</button><button id="paper-pause" class="secondary">暂停</button><button id="paper-step" class="secondary">单步回放</button></div><div class="form-grid"><label>同步时使用的数据<select id="paper-sync-dataset"></select></label><button id="paper-sync" class="secondary">立即同步</button></div><details class="inline-details"><summary>同步与恢复</summary><p>本地服务每 15 秒检查行情，页面每 5 秒刷新状态。CSV 更新后请选择并同步；退出服务后停止，重启需手动恢复。</p></details></div><div id="paper-result" class="result-area"><p class="empty-copy">创建账户后可启动、暂停或单步回放。未取得新行情时等待，不生成交易。</p></div>
+        </details>
       </section>
     </main>
     <footer class="page-footer">策略拾录<span>本地策略研究与模拟交易</span></footer>

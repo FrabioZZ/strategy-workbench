@@ -6,8 +6,8 @@ from typing import Literal
 from fastapi import HTTPException
 from pydantic import Field
 from app.store import now
-from app.trading.models import Model, RunInput
-from app.trading.portfolios import ready_portfolio
+from app.trading.models import Model, RunInput, portfolio_timeframe
+from app.trading.portfolios import check_portfolio_symbol, ready_portfolio
 from app.trading.store import identity
 from app.trading.paper_engine import engine_info, replay
 
@@ -74,6 +74,13 @@ class PaperService:
         if not engine_info()['installed']:
             raise HTTPException(503, '请在本机安装 requirements-paper.txt 中的可选模拟引擎版本')
         p = ready_portfolio(self.store, c, self.sources, body.portfolio_id, body.portfolio_revision)
+        try:
+            timeframe = portfolio_timeframe(p)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        if timeframe != 'daily':
+            raise HTTPException(400, '5分钟策略请使用行情工作台运行')
+        check_portfolio_symbol(p, body.symbol)
         ds, rows = self.dataset(c, body.dataset_id, body.symbol)
         ledger = replay(p, [], body.initial_cash, body.costs.model_dump())
         value = {**identity(), **body.model_dump(), **ledger, 'kind': KIND, 'status': 'paused',

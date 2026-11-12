@@ -1,4 +1,4 @@
-"""Adjusted-price research ledger. Synthetic units, never executable stock orders."""
+"""Daily research ledger with synthetic units and next-open estimates."""
 from copy import deepcopy
 from math import floor
 from app.trading import engine
@@ -27,9 +27,10 @@ def execute(ledger, bar, pending, costs, symbol):
     side='buy' if delta>0 else 'sell'
     price=bar['open']*(1+costs['slippage_bps']/10000*(1 if side=='buy' else -1))
     qty=abs(delta); reason=''
+    model=ledger.get('execution_model','adjusted_research')
     if bar.get('gap_before'): reason='存在缺失交易日，禁止跨缺口执行旧信号'
     elif bar['suspended'] or bar['volume']==0: reason='停牌或零成交量，研究账户不调仓'
-    elif price>bar['high']+1e-8 or price<bar['low']-1e-8: reason='假设滑点价超出复权日线范围'
+    elif price>bar['high']+1e-8 or price<bar['low']-1e-8: reason='假设滑点价超出日线价格范围'
     if side=='buy':
         affordable=min(max(0,ledger['cash']-costs['min_commission'])/price,
                        ledger['cash']/(price*(1+costs['commission_bps']/10000)))
@@ -46,7 +47,7 @@ def execute(ledger, bar, pending, costs, symbol):
         reason='卖出所得不足支付假设费用'
     order=dict(id=f"{pending['date']}:{bar['date']}:{side}",signal_date=pending['date'],date=bar['date'],
                symbol=symbol,side=side,quantity=round(qty,8),price=price,status='rejected' if reason else 'filled',
-               reason=reason,fee=0 if reason else charges,execution_model='adjusted_research',quantity_unit='synthetic_unit')
+               reason=reason,fee=0 if reason else charges,execution_model=model,quantity_unit='synthetic_unit')
     ledger['orders'].append(order)
     if reason: return
     ledger['fills'].append({k:order[k] for k in ('signal_date','date','symbol','side','quantity','price','fee','execution_model','quantity_unit')} | {'order_id':order['id']})

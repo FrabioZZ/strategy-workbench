@@ -6,6 +6,8 @@ from app.trading.conditions import Condition, validate_tree
 from datetime import date
 import re
 
+MAIN_BOARD_SYMBOL_PATTERN = r'^(?:60[0135]\d{3}\.SH|00[0123]\d{3}\.SZ)$'
+
 class Model(StrictModel):
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False, str_strip_whitespace=True)
 
@@ -49,9 +51,11 @@ class Item(Model):
     name: str = Field(min_length=1, max_length=120)
     source_id: str | None = None
     enabled: bool = True
+    timeframe: Literal['daily', '5m'] = 'daily'
     weight: float = Field(default=0, ge=0, le=100)
     confirmed: bool = False
     mapping_note: str = Field(default='', max_length=4000)
+    mapping_version: str | None = Field(default=None, min_length=1, max_length=80)
     rules: Annotated[Threshold | MovingAverage | Conditional, Field(discriminator='type')] | None = None
 
 class PortfolioInput(Model):
@@ -114,7 +118,7 @@ class RunInput(Model):
         return value
 
 class SessionInput(RunInput):
-    symbol: str = Field(pattern=r'^(60[0135]\d{3}\.SH|00[0123]\d{3}\.SZ)$')
+    symbol: str = Field(pattern=MAIN_BOARD_SYMBOL_PATTERN)
     dataset_id: str | None = None
     name: str = Field(min_length=1,max_length=120)
     mode: Literal['replay','incremental']
@@ -127,6 +131,13 @@ class SessionInput(RunInput):
         if self.mode == 'replay' and self.feed != 'csv':
             raise ValueError('历史回放只使用已导入数据')
         return self
+
+def portfolio_timeframe(portfolio):
+    frames = {item.get('timeframe', 'daily') for item in portfolio['items'] if item['enabled']}
+    if len(frames) != 1:
+        raise ValueError('同一组合的启用策略须使用相同周期')
+    return frames.pop()
+
 
 class Revision(Model):
     revision: int = Field(ge=1)

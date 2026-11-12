@@ -1,5 +1,6 @@
 (() => {
   'use strict';
+  if (window.dailyDemo) return;
   const host = document.querySelector('#workspace-paper');
   if (!host) return;
   const panel = document.createElement('section');

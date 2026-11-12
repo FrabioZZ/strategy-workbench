@@ -1,6 +1,9 @@
 import json
+import re
 from fastapi import HTTPException
 from app.store import now
+from app.strategy_names import unique_strategy_name
+from app.trading.models import MAIN_BOARD_SYMBOL_PATTERN
 from app.trading.store import identity
 
 
@@ -13,14 +16,28 @@ def candidates(source_store):
         stale=r['document_id'] in latest or r['revision'] != r['current_revision']
         latest[r['document_id']]=True
         strategy=json.loads(r['result'])
-        result.append(dict(id=r['id'],document_id=r['document_id'],title=strategy.get('title') or r['title'],
+        strategy['title']=r['display_title']
+        result.append(dict(id=r['id'],document_id=r['document_id'],title=r['display_title'],
                            source_title=r['title'],revision=r['revision'],
                            stale=stale,is_demo=bool(r['is_demo']),strategy=strategy,
                            transcript=json.loads(r['transcript']),created_at=r['created_at'],
                            corrected_transcript=json.loads(r['corrected_transcript']) if r['corrected_transcript'] else None,
                            ai_review=json.loads(r['ai_review']) if r['ai_review'] else None,
+                           ai_mapping=json.loads(r['ai_mapping']) if r['ai_mapping'] else None,
                            evidence_transcript_version=strategy.get('transcript_version','original')))
     return result
+
+
+def _source_mapping(source):
+    return (source or {}).get('ai_mapping') or {}
+
+
+def _mapping_matches(item, source):
+    mapping = _source_mapping(source)
+    return (mapping.get('ready') is True
+            and mapping.get('source_revision') == source['revision']
+            and mapping.get('timeframe', 'daily') == item.get('timeframe', 'daily')
+            and mapping.get('rules') == item['rules'])
 
 
 def readiness(p, available):
@@ -38,8 +55,17 @@ def readiness(p, available):
         if item['source_id']:
             src=lookup.get(item['source_id'])
             if not src or src['stale']: errors.append(item['name']+'：原草案已过期或不存在，请重新选择并确认')
-            elif src['strategy'].get('questions'): errors.append(item['name']+'：原草案有未解决问题，不可运行')
             else:
+                mapping = _source_mapping(src)
+                version = mapping.get('mapping_version')
+                snapshot_version = _source_mapping(item.get('source_snapshot')).get('mapping_version')
+                if version != item.get('mapping_version') or version != snapshot_version:
+                    errors.append(item['name']+'：请载入并确认最新的执行规则版本。')
+                elif not _mapping_matches(item, src) and (version or src['strategy'].get('questions') or mapping.get('decisions')):
+                    errors.append(item['name']+'：当前规则缺少与原草案一致的术语确认和映射。')
+                if (mapping.get('ready') is True and mapping.get('rules') == item['rules']
+                        and mapping.get('timeframe', 'daily') != item.get('timeframe', 'daily')):
+                    errors.append(item['name']+'：策略周期必须与已核验规则的周期一致。')
                 kinds={r.get('kind') for r in src['strategy'].get('rules',[])}
                 if not kinds: errors.append(item['name']+'：草案没有可核对的原规则')
                 if 'stop_loss' in kinds and (not item['rules'] or not item['rules'].get('stop_loss_pct')):
@@ -54,7 +80,18 @@ def readiness(p, available):
     return {'ready':not errors,'errors':errors,'warnings':warnings}
 
 
+def number_item_names(items):
+    occupied = {item['name'].strip().casefold() for item in items}
+    seen = set()
+    for item in items:
+        key = item['name'].strip().casefold()
+        if key in seen:
+            item['name'] = unique_strategy_name(item['name'], occupied, 120)
+        seen.add(key)
+
+
 def decorate(p, source_store):
+    number_item_names(p['items'])
     p['readiness']=readiness(p,candidates(source_store))
     return p
 
@@ -63,9 +100,26 @@ def save_portfolio(store, c, source_store, body, ident=None):
     old=store.get(c,'portfolio',ident) if ident else None
     if old and body.revision != old['revision']: raise HTTPException(409,'组合版本已变化，请刷新后重试')
     p=body.model_dump(exclude={'revision'})
+    number_item_names(p['items'])
     available=candidates(source_store); lookup={s['id']:s for s in available}
+    previous_items = {item['id']: item for item in old['items']} if old else {}
     for item in p['items']:
-        item['source_snapshot']=lookup.get(item['source_id']) if item['source_id'] else None
+        snapshot = lookup.get(item['source_id'])
+        version = _source_mapping(snapshot).get('mapping_version')
+        selected = item.get('mapping_version')
+        if selected is None:
+            item.pop('mapping_version', None)
+        if version and (version != selected or not _mapping_matches(item, snapshot)):
+            # Keep the last confirmed provenance when saving an obsolete item.
+            # Never attach the replacement mapping to a different selection.
+            previous = previous_items.get(item['id'], {}).get('source_snapshot')
+            if (selected and (previous or {}).get('id') == item['source_id']
+                    and _source_mapping(previous).get('mapping_version') == selected
+                    and _mapping_matches(item, previous)):
+                snapshot = previous
+            else:
+                snapshot = {**snapshot, 'ai_mapping': None}
+        item['source_snapshot'] = snapshot
     p.update(identity() if not old else {k:old[k] for k in ('id','created_at')})
     p.update(revision=old['revision']+1 if old else 1, updated_at=now())
     p['readiness']=readiness(p,available)
@@ -77,3 +131,26 @@ def ready_portfolio(store,c,source_store,ident,revision):
     if p['revision'] != revision: raise HTTPException(409,'组合版本已变化，请使用最新版本创建运行')
     if not p['readiness']['ready']: raise HTTPException(409,'；'.join(p['readiness']['errors']))
     return p
+
+
+def check_portfolio_symbol(portfolio, symbol, *, ticker_message='{name}：原策略指定 {ticker}，当前选择 {symbol}'):
+    for item in portfolio['items']:
+        snapshot = item.get('source_snapshot')
+        if not item['enabled'] or not snapshot:
+            continue
+        asset = snapshot['strategy'].get('asset')
+        if not isinstance(asset, dict):
+            continue
+        ticker = ''.join(asset.get('value', '').split()).upper()
+        name = item['name']
+        if re.fullmatch(MAIN_BOARD_SYMBOL_PATTERN, ticker) and ticker != symbol:
+            raise HTTPException(400, ticker_message.format(name=name, ticker=ticker, symbol=symbol))
+        if not item.get('mapping_version'):
+            continue
+        market = re.fullmatch(r'(沪市|深市|沪深|A股)(主板)?(?:普通)?(?:股票)?', ticker)
+        if not market:
+            continue
+        suffix = {'沪市': '.SH', '深市': '.SZ'}.get(market[1])
+        if ((suffix and not symbol.endswith(suffix))
+                or (market[2] and not re.fullmatch(MAIN_BOARD_SYMBOL_PATTERN, symbol))):
+            raise HTTPException(400, f'{name}：原策略限定{ticker}，当前选择 {symbol}')

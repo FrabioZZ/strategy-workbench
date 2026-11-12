@@ -18,6 +18,8 @@ _NUMBER = r'\d+(?:[.,]\d+)*\s*[%％‰]?|' + _NUMERAL
 _NUMBERS = re.compile(_NUMBER)
 _QUANTITIES = re.compile(
     r'(?:' + _NUMBER + r')\s*(?:美元|港元|人民币|人民幣|元|股|手|成|倍|天|日|周|週|月|年|分钟|分鐘|秒)')
+_MA_TYPO = re.compile(r'(' + _NUMBER + r'\s*(?:日|天)\s*)军线')
+_STOP_TYPO = re.compile(r'((?:百分之' + _NUMBER + r'|\d+(?:\.\d+)?[%％])\s*)只损(?!失)')
 
 # Longest match first, so adding "等于" or changing "只有" to "只要"
 # changes the signature even when some individual characters are shared.
@@ -34,7 +36,7 @@ _PROTECTED_WORDS = '''
 高过 高過 低过 低過 多于 多於 少于 少於 超出 达到 達到
 高 低 大 小 多 少 上方 下方 上面 下面 之上 之下
 上涨 上漲 下跌 上升 下降 增加 减少 減少 扩大 擴大 缩小 縮小
-上穿 下穿 突破 跌破 放量 缩量 縮量 强势 強勢 弱势 弱勢
+上穿 下穿 突破 跌破 跌穿 站上 站稳 站穩 放量 缩量 縮量 强势 強勢 弱势 弱勢
 之前 之后 之後 以前 以后 以後 前 后 後 当天 當天 今天 昨天 明天 次日 后天 後天
 开盘 開盤 收盘 收盤 最高 最低 均线 均線 日线 日線 周线 周線 月线 月線
 分钟 分鐘 小时 小時 仓位 倉位 股价 股價 价格 價格 收盘价 收盤價
@@ -52,7 +54,8 @@ def _plain(text):
 def _canonical_terms(text):
     for original, corrected in _TERM_ALIASES.items():
         text = text.replace(original, corrected)
-    return text
+    text = _MA_TYPO.sub(r'\1均线', text)
+    return _STOP_TYPO.sub(r'\1止损', text)
 
 
 def _scope_text(text):

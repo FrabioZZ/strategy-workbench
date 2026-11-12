@@ -57,6 +57,8 @@ def test_real_transcript_examples_accept_local_model_corrections(monkeypatch, or
     ('目标仓为50%，先复磐市场情续。', '目标仓位50%，先复盘市场情绪。'),
     ('5日均现高于20日均线时买入', '5日均线高于20日均线时买入。'),
     ('如果均现不稳定，先观察', '如果均线不稳定，先观察。'),
+    ('股价高于二十日军线时买入，收盘下跌百分之五只损。',
+     '股价高于二十日均线时买入，收盘下跌百分之五止损。'),
 ])
 def test_unknown_local_recognition_and_grammar_errors_are_not_a_closed_glossary(
         monkeypatch, original, corrected):
@@ -74,6 +76,9 @@ def test_unknown_local_recognition_and_grammar_errors_are_not_a_closed_glossary(
     ('价格10元时关注', '价格10美元时关注'),
     ('收盘后买入', '收盘前买入'),
     ('10元买入', '10元卖出'),
+    ('股价占上均线后买入', '股价站上均线后买入'),
+    ('价格跌跛20元就卖出', '价格跌破20元就卖出'),
+    ('这次操作只损失五元', '这次操作止损失五元'),
     ('信号确认后加仓', '信号确认后减仓'),
     ('短线做多观察', '短线做空观察'),
     ('不要买入', '要买入'),

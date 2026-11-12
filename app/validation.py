@@ -2,6 +2,13 @@ import json
 import re
 from app.models import Segment, StrategyInput
 
+EXPLICIT_MA_BREAKOUT = re.compile(r'收盘价向上突破\s*(?:\d+|[零〇一二三四五六七八九十百两]+)\s*(?:日|天)均线')
+VAGUE_RULE = re.compile(r'适量|适当|附近|放量|缩量|突破|企稳|趋势|注意|合适|明显|较大|较小')
+
+
+def needs_rule_clarification(text):
+    return bool(VAGUE_RULE.search(EXPLICIT_MA_BREAKOUT.sub('', text)))
+
 
 def _unique_pairs(pairs):
     result = {}
@@ -44,7 +51,7 @@ def validate_strategy(raw: str, segments: list[Segment]) -> dict:
         # Extractive rules are deliberate: generated thresholds/paraphrases cannot pass.
         if not any(rule.text in e["quote"] for e in refs):
             raise ValueError("策略规则必须逐字摘自引用，禁止补造条件或阈值")
-        vague = bool(re.search(r"适量|适当|附近|放量|缩量|突破|企稳|趋势|注意|合适|明显|较大|较小", rule.text))
+        vague = needs_rule_clarification(rule.text)
         if vague:
             questions.append(f"需人工明确“{rule.text[:120]}”的判定口径、阈值与适用条件。")
         rules.append({**rule.model_dump(), "evidence": refs, "needs_clarification": vague,

@@ -4,7 +4,8 @@ from app.store import now
 from app.trading import engine, feeds, research
 from app.trading.datasets import summary
 from app.trading.datasets import CN_TZ, LIMITATIONS, completed_date
-from app.trading.portfolios import ready_portfolio
+from app.trading.models import portfolio_timeframe
+from app.trading.portfolios import check_portfolio_symbol, ready_portfolio
 from app.trading.store import identity
 from app.trading.conditions import raw_only_indicators
 
@@ -20,6 +21,13 @@ class TradingService:
 
     def create(self,c,body,paper=False):
         p=ready_portfolio(self.store,c,self.sources,body.portfolio_id,body.portfolio_revision)
+        try:
+            timeframe = portfolio_timeframe(p)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        if timeframe != 'daily':
+            raise HTTPException(400, '5分钟策略请使用行情工作台运行')
+        check_portfolio_symbol(p, body.symbol)
         ds=self.dataset(c,body.dataset_id,body.symbol) if body.dataset_id else None
         is_research=bool(ds and ds.get('dataset_type')=='research_adjusted')
         if is_research and raw_only_indicators(p):

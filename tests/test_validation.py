@@ -39,6 +39,19 @@ def test_vague_rule_is_not_filled_in():
     assert r["rules"][0]["evidence"][0]["start"] is None
 
 
+@pytest.mark.parametrize(('text', 'vague'), [
+    ('收盘价向上突破二十日均线就买入', False),
+    ('突破以后再买入', True),
+    ('收盘价向上突破20日均线后适量买入', True),
+])
+def test_explicit_closing_crossover_is_distinguished_from_vague_breakout(text, vague):
+    d = draft()
+    d['timeframe'] = None
+    d['rules'][0].update(text=text, evidence=[{'segment_id': 's1', 'quote': text}])
+    result = validate_strategy(json.dumps(d), [Segment(id='s1', text=text)])
+    assert result['rules'][0]['needs_clarification'] is vague
+
+
 def test_srt_and_plain_text_keep_real_time_only():
     assert parse_transcript("1\n00:00:02,000 --> 00:00:05,000\n日线买入\n")[0].start == 2.0
     assert parse_transcript("一句原文\n第二句")[0].start is None

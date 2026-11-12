@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 import uuid
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.concurrency import run_in_threadpool
@@ -28,6 +28,7 @@ from app.trading.paper_router import router as external_paper_router
 from app.trading.quotes import QuoteService
 from app.trading.quote_accounts import QuoteAccounts, QuoteWorker
 from app.trading.quote_router import router as quote_router
+from app.trading.workstation import Workstation, WorkstationWorker, router as workstation_router
 
 
 def public_document(document):
@@ -54,7 +55,7 @@ class BodyLimitMiddleware:
         await self.app(scope, bounded_receive, send)
 
 
-def create_app(settings=None, extractor=None):
+def create_app(settings=None, extractor=None, *, daily_demo=None, history_store=None, replay_market=None):
     config = settings or Settings.from_env()
     config.data_dir = Path(config.data_dir).resolve()
     store = Store(config.data_dir)
@@ -65,6 +66,11 @@ def create_app(settings=None, extractor=None):
     external_paper = PaperService(trading_store, store)
     quotes = QuoteService()
     quote_accounts = QuoteAccounts(trading_store, quotes)
+    workstation = Workstation(
+        trading_store, store,
+        quote=None if daily_demo else lambda symbol: quotes.get([symbol])['quotes'][0],
+        history_store=history_store, replay_market=replay_market,
+    )
 
     @asynccontextmanager
     async def lifespan(app):
@@ -72,14 +78,19 @@ def create_app(settings=None, extractor=None):
         store.recover()
         app.state.jobs = Jobs(store, config, extractor or Extractor(ai_configuration), asr_configuration)
         trading_store.init()
-        external_paper.recover()
-        app.state.paper_worker = PaperWorker(trading_service)
-        app.state.quote_worker = QuoteWorker(quote_accounts)
+        workstation.recover()
+        if not daily_demo:
+            external_paper.recover()
+            app.state.paper_worker = PaperWorker(trading_service)
+            app.state.quote_worker = QuoteWorker(quote_accounts)
+        app.state.workstation_worker = WorkstationWorker(workstation)
         try:
             yield
         finally:
-            app.state.quote_worker.close()
-            app.state.paper_worker.close()
+            app.state.workstation_worker.close()
+            if not daily_demo:
+                app.state.quote_worker.close()
+                app.state.paper_worker.close()
             app.state.jobs.close()
 
     app = FastAPI(title="策略拾录", lifespan=lifespan, docs_url=None, redoc_url=None)
@@ -89,9 +100,11 @@ def create_app(settings=None, extractor=None):
     app.state.trading_service = trading_service
     app.state.external_paper = external_paper
     app.state.quotes, app.state.quote_accounts = quotes, quote_accounts
-    app.include_router(trading_router(trading_service))
-    app.include_router(external_paper_router(external_paper))
-    app.include_router(quote_router(quote_accounts))
+    app.include_router(trading_router(trading_service, sample_only=bool(daily_demo)))
+    if not daily_demo:
+        app.include_router(external_paper_router(external_paper))
+        app.include_router(quote_router(quote_accounts))
+    app.include_router(workstation_router(workstation))
     app.include_router(ai_router(ai_configuration, store))
     app.add_middleware(BodyLimitMiddleware, limit=(config.max_upload_mb + 1) * 1024 * 1024)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"])
@@ -130,6 +143,8 @@ def create_app(settings=None, extractor=None):
                       ai_note='配置已填写，连接尚未验证' if ai['configured'] else ai['storage_note'])
         asr = asr_configuration.public()
         public.update(asr_configured=asr['configured'], asr_provider=asr['provider'],asr_model=asr['model'] if asr['provider']=='qwen' else asr['local_model'],asr_note=asr['note'])
+        if daily_demo:
+            public.update(daily_demo=daily_demo, ai_note='隔离演示模型替身，仅响应指定样例。')
         return public
 
     @app.get('/api/asr/config')
@@ -201,8 +216,10 @@ def create_app(settings=None, extractor=None):
                 await run_in_threadpool(app.state.jobs.inspect_cached_media, document['id'])
                 app.state.jobs.submit(document['id'], 'transcribe', local_only=True)
             return public_document(store.document(document["id"]))
-        except Exception:
-            path.unlink(missing_ok=True)
+        except Exception as exc:
+            # A media upload whose document was deleted during probing may already be shared by a copy.
+            if text_file or not isinstance(exc, KeyError):
+                path.unlink(missing_ok=True)
             raise
         finally:
             await file.close()
@@ -210,6 +227,14 @@ def create_app(settings=None, extractor=None):
     @app.get("/api/documents/{ident}")
     def document(ident: str):
         return public_document(app.state.jobs.inspect_cached_media(ident))
+
+    @app.delete("/api/documents/{ident}")
+    def delete_document(ident: str):
+        try:
+            store.delete_document(ident)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+        return {'deleted': True}
 
     @app.put("/api/documents/{ident}/transcript")
     def edit(ident: str, body: TranscriptUpdate):
@@ -239,11 +264,11 @@ def create_app(settings=None, extractor=None):
 
     @app.get("/api/jobs/{ident}")
     def job(ident: str):
-        return store.job(ident)
+        return store.job(ident, visible_only=True)
 
     @app.post("/api/jobs/{ident}/retry", status_code=202)
     def retry(ident: str):
-        job = store.job(ident)
+        job = store.job(ident, visible_only=True)
         if job["status"] not in ("failed", "interrupted"):
             raise HTTPException(409, "仅失败或中断任务可以重试")
         try:
@@ -264,6 +289,7 @@ def create_app(settings=None, extractor=None):
                    "is_demo": document["is_demo"], "transcript_revision": document["revision"],
                    "transcript": document["segments"], "strategy": document["strategy"],
                    "corrected_transcript": document['corrected_segments'], "ai_review": document['ai_review'],
+                   "ai_mapping": document['ai_mapping'],
                    "evidence_transcript_version": document['strategy'].get('transcript_version','original'),
                    "provider": document["strategy_provider"], "model": document["strategy_model"],
                    "created_at": document["strategy_created_at"]}
@@ -278,6 +304,13 @@ def create_app(settings=None, extractor=None):
         return FileResponse(path)
 
     app.mount("/static", StaticFiles(directory=ROOT / "frontend"), name="static")
+
+    @app.get("/runtime-mode.js", include_in_schema=False)
+    def runtime_mode():
+        script = f"window.dailyDemo = {json.dumps(daily_demo)};\n"
+        if daily_demo:
+            script += "document.documentElement.dataset.dailyDemo = 'true';\n"
+        return Response(script, media_type="application/javascript", headers={'Cache-Control': 'no-store'})
 
     @app.get("/")
     def index():

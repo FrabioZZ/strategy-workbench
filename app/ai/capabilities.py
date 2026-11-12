@@ -6,10 +6,12 @@ Unknown qualifiers stay unresolved instead of being discarded during parsing.
 import json
 import math
 import re
+from app.ai.mapping_language import NUMBER, STOP_BASIS, normalize_rule_numbers
 
 
 ALIASES = {
     '开盘价': 'OPEN', '最高价': 'HIGH', '最低价': 'LOW', '收盘价': 'CLOSE',
+    '日线收盘价': 'CLOSE',
     '成交量': 'VOLUME', '昨收价': 'PREV_CLOSE', '前收盘价': 'PREV_CLOSE',
     '均线': 'MA', '简单均线': 'MA', '指数均线': 'EMA',
     '涨幅': 'CHANGE_PCT', '涨跌幅': 'CHANGE_PCT', '高开幅度': 'GAP_PCT',
@@ -21,21 +23,31 @@ ALIASES = {
 OPERATORS = {
     '大于等于': 'gte', '不低于': 'gte', '>=': 'gte', '≥': 'gte',
     '小于等于': 'lte', '不高于': 'lte', '<=': 'lte', '≤': 'lte',
-    '上穿': 'cross_above', '向上穿越': 'cross_above',
-    '下穿': 'cross_below', '向下穿越': 'cross_below',
+    '上穿': 'cross_above', '向上穿越': 'cross_above', '向上突破': 'cross_above',
+    '下穿': 'cross_below', '向下穿越': 'cross_below', '跌破': 'cross_below',
     '大于': 'gt', '高于': 'gt', '>': 'gt', '小于': 'lt', '低于': 'lt', '<': 'lt',
     '不等于': 'ne', '!=': 'ne', '等于': 'eq', '==': 'eq', '=': 'eq',
 }
-NUMBER = r'-?\d+(?:\.\d+)?'
+BUY_ACTION = r'买入|买'
+SELL_ACTION = r'全部卖出|全部卖掉|清仓'
+_ACTION = re.compile(rf'\s*(?:的时候|时|则|就)?(?:{BUY_ACTION}|{SELL_ACTION})\s*(?=[，,。；;\n！!]|$)')
+_CONNECTOR = r'(?:并且|而且|且|同时|或者|或)'
+_AFTER_PAUSE = re.compile(rf'\s*{_CONNECTOR}')
+_PAUSED_CONNECTOR = re.compile(rf',(?={_CONNECTOR})')
 
 
 def split_daily_clauses(text):
-    """Keep indicator argument commas intact while separating narration/rules."""
+    """Keep indicator arguments and pauses before explicit actions intact."""
     clauses, start, depth = [], 0, 0
     for i, char in enumerate(text):
         if char in '(（': depth += 1
         elif char in ')）': depth -= 1
         elif char in '，,。；;\n！!' and depth == 0 and not (char == '!' and text[i:i+2] == '!='):
+            if char in '，,':
+                if _ACTION.match(text, i+1) or normalized(text[start:i]) == STOP_BASIS:
+                    continue
+                if _AFTER_PAUSE.match(text, i+1) and not _ACTION.search(text, start, i):
+                    continue
             if text[start:i].strip(): clauses.append(text[start:i].strip())
             start = i + 1
     if text[start:].strip(): clauses.append(text[start:].strip())
@@ -73,6 +85,8 @@ conditional规则必须完整包含buy、sell、target_pct，比较使用left/ri
 引用字段使用buy、sell、target_pct、timeframe，止损存在时另给stop_loss_pct；buy/sell引用必须证明整棵条件树。
 保留原话，不把阈值上限当固定仓位，不把定性强弱补成数字。正常开场与旁白不算交易条件。
 支持常见原文表达如“当14日RSI小于30的时候买入”“收盘价低于5日均线时全部卖出”以及明确参数的指标比较。
+明确的“收盘价向上突破二十日均线就买”“当收盘价跌破二十天均线，就清仓”分别使用CLOSE对MA(20)的cross_above和cross_below。
+“股价站上均线”不能自行假定日线收盘或交叉事件；“跌破百分之五止损”未说明基准和收盘时点，须澄清。
 首板前一日条件是FIRST_LIMIT_UP offset=1；次日收盘确认后第三日开盘执行，不能声称盘中打板。
 '''
 
@@ -133,7 +147,7 @@ def parse_operand(text):
 
 def parse_condition(text, nesting=0):
     if nesting > 8: return None
-    text = normalized(text)
+    text = _PAUSED_CONNECTOR.sub('', normalized(text))
     # Explicit grouping is accepted, but never strip a partial pair of brackets.
     if text.startswith('(') and text.endswith(')'):
         depth = 0
@@ -192,22 +206,36 @@ def canonical_condition(value):
     return value['op'], operand(value['left']), operand(value['right'])
 
 
+def parse_daily_rule_clause(clause):
+    clause = normalize_rule_numbers(normalized(clause))
+    position = re.fullmatch(r'(?:目标)?仓位(?:为|是|设为)?(' + NUMBER + r')%', clause)
+    if position:
+        return 'target_pct', float(position[1])
+    stop = re.fullmatch(rf'{STOP_BASIS}(?:的|,)?(?:日线)?收盘(?:下跌|亏损)({NUMBER})%(?:时|就)?(?:全部)?(?:止损|清仓)', clause)
+    if stop:
+        return 'stop_loss_pct', float(stop[1])
+    match = re.fullmatch(rf'(?:如果|当(?!日))?(.+?),?(?:的时候|时|则|就)?({BUY_ACTION}|{SELL_ACTION})', clause)
+    if match:
+        expression = parse_condition(match[1])
+        if expression:
+            return ('buy' if match[2] in ('买入', '买') else 'sell'), expression
+    return None
+
+
 def conditional_coverage(text, rules, narration):
     covered = set()
     for clause in split_daily_clauses(text):
-        clause = normalized(clause)
-        if narration(clause): continue
-        position = re.fullmatch(r'(?:目标)?仓位(?:为|是|设为)?(' + NUMBER + r')%', clause)
-        if position and float(position[1]) == rules['target_pct']:
-            covered.add('target_pct'); continue
-        stop = re.fullmatch(r'以入场信号收盘价为基准(?:的)?(?:日线)?收盘(?:下跌|亏损)(' + NUMBER + r')%(?:时)?(?:全部)?(?:止损|清仓)', clause)
-        if stop and float(stop[1]) == rules.get('stop_loss_pct'):
-            covered.add('stop_loss_pct'); continue
-        match = re.fullmatch(r'(?:如果|当(?!日))?(.+?)(?:的时候|时|则)?(买入|全部卖出|清仓)', clause)
-        if not match: return set(), False
-        expression = parse_condition(match[1])
-        field = 'buy' if match[2] == '买入' else 'sell'
-        if not expression or canonical_condition(expression) != canonical_condition(rules[field]): return set(), False
+        if narration(normalize_rule_numbers(normalized(clause))):
+            continue
+        parsed = parse_daily_rule_clause(clause)
+        if not parsed:
+            return set(), False
+        field, value = parsed
+        if field in ('buy', 'sell'):
+            if canonical_condition(value) != canonical_condition(rules[field]):
+                return set(), False
+        elif value != rules.get(field):
+            return set(), False
         covered.add(field)
     return covered, bool(covered)
 

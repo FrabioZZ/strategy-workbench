@@ -87,7 +87,7 @@ def draft_fixture():
 
 def test_ai_to_original_portfolio_backtest_and_paper_contract(tmp_path,monkeypatch):
     texts,draft,mapping=draft_fixture()
-    model_transport(monkeypatch,[{'changes':[],'questions':[]},draft,mapping])
+    calls = model_transport(monkeypatch,[{'changes':[],'questions':[]},draft,mapping])
     settings=Settings(data_dir=tmp_path,ai_provider='openai',ai_base_url='https://example.test/v1',
                       ai_model='test-double',ai_api_key='test-only-key')
     with TestClient(create_app(settings), client=('127.0.0.1',1234)) as c:
@@ -98,11 +98,15 @@ def test_ai_to_original_portfolio_backtest_and_paper_contract(tmp_path,monkeypat
         assert doc['ai_review']['status']=='reviewed'
         assert doc['segments']==doc['corrected_segments']
         src=c.get('/api/trading/strategies').json()[0]
+        assert doc['strategy_id'] == src['id']
         assert src['title']==draft['title'] and src['source_title']=='视频资料'
         r=c.post('/api/ai/strategies/'+src['id']+'/mapping')
         assert r.status_code==200,r.text
         suggestion=r.json()
         assert suggestion['ready'] and suggestion['confirmed'] is False, suggestion
+        assert c.post('/api/ai/strategies/'+src['id']+'/mapping').json() == suggestion
+        assert len(calls) == 3
+        assert c.get(f'/api/documents/{doc["id"]}/export').json()['ai_mapping'] == suggestion
         item={'id':'a','name':src['title'],'source_id':src['id'],'enabled':True,'weight':100,
               'confirmed':False,'mapping_note':suggestion['mapping_note'],'rules':suggestion['rules']}
         p=c.post('/api/trading/portfolios',json={'name':'AI契约组合','items':[item]}).json()
@@ -130,6 +134,11 @@ def test_ai_to_original_portfolio_backtest_and_paper_contract(tmp_path,monkeypat
         paper=c.get(url).json()
         assert paper['fills']==backtest['fills'] and paper['fills']
         assert 'test-only-key' not in c.get(f'/api/documents/{doc["id"]}/export').text
+        assert c.put(f'/api/documents/{doc["id"]}/transcript', json={
+            'revision': doc['revision'], 'segments': doc['segments'],
+        }).status_code == 200
+        assert c.post('/api/ai/strategies/'+src['id']+'/mapping').status_code == 409
+        assert len(calls) == 3
 
 
 def settings(path, provider='openai'):

@@ -1,6 +1,7 @@
 (() => {
   'use strict';
-  const host = document.querySelector('#workspace-paper');
+  if (window.dailyDemo) return;
+  const host = document.querySelector('#paper-advanced') || document.querySelector('#workspace-paper');
   if (!host || document.querySelector('#pex-panel')) return;
   const panel = document.createElement('section');
   panel.id = 'pex-panel'; panel.className = 'pex-panel'; panel.setAttribute('aria-labelledby', 'pex-title');

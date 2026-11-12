@@ -4,6 +4,7 @@
 const q=s=>document.querySelector(s), all=s=>[...document.querySelectorAll(s)];
 const escape=esc;
 const T={workspace:'materials',loaded:false,loading:null,strategies:[],portfolios:[],datasets:[],runs:[],sessions:[],portfolio:null,items:[],dirty:false,session:null,poll:null,busy:false};
+const market=window.marketWorkstation?.mount(request);
 // UI-only request state stays out of the saved portfolio schema.
 const aiMappings=new Map();
 const conditionalDrafts=new Map();
@@ -29,6 +30,7 @@ function switchWorkspace(focus=false){
   q('#materials-library').hidden=T.workspace!=='materials';q('#workspace-label').textContent=names[T.workspace];
   if(focus){q('#notice').hidden=true;window.scrollTo({top:0,behavior:'instant'});q(`#workspace-${T.workspace} h1`)?.focus({preventScroll:true});}
   if(T.workspace!=='materials')task(null,load);
+  market?.activate(T.workspace);
   scheduleRefresh();
 }
 window.addEventListener('hashchange',()=>switchWorkspace(true));
@@ -47,6 +49,7 @@ function fillSelects(){
   options(q('#research-history'),T.runs.filter(isResearchRun),'选择已完成的研究回测',r=>`${r.portfolio_snapshot.name} v${r.portfolio_revision} · ${r.symbol} · ${stamp(r.created_at)}`);
   options(q('#paper-history'),T.sessions,'选择模拟账户',s=>`${s.name} · ${s.mode==='replay'?'历史回放':'新行情'} · ${s.status==='running'?'运行中':'已暂停'}`,T.session?.id||'');
   q('#backtest-strategy-guide').hidden=T.portfolios.some(p=>p.readiness.ready);
+  market?.setCatalog(T.portfolios,T.datasets);
   researchRuleNote();
   renderResearchCatalog();
   syncDates('backtest');
@@ -63,7 +66,7 @@ const hasConditional=()=>T.cap?.rule_types?.includes('conditional');
 function renderIndicatorLibrary(){
   let root=q('#indicator-library');if(!root){q('.trading-columns').insertAdjacentHTML('beforebegin','<details id="indicator-library" class="indicator-library"></details>');root=q('#indicator-library');}
   const indicators=T.cap.indicators||[];
-  root.innerHTML=`<summary>支持的日线指标与参数（${indicators.length||'MA / 价格阈值'}）</summary><p class="helper">周期单位为交易日。选择指标查看参数范围与预热要求。</p>${indicators.length?`<div class="indicator-grid">${indicators.map(i=>`<details class="indicator-entry"><summary>${escape(i.label||i.name)} · ${escape(i.name)}${i.raw_only?' · 仅未复权限价数据':''}</summary><p>${escape(i.formula||i.description||i.note||'')}</p><p>参数：<code>${escape(Object.entries(i.params||i.parameters||{}).map(([key,p])=>`${key} = ${p.default}（${p.enum?p.enum.join(' / '):`${p.minimum}～${p.maximum}`}${p.type==='integer'?'，整数':''}）`).join('；')||'无需参数')}</code></p>${i.warmup?`<p>预热：${escape(typeof i.warmup==='string'?i.warmup:JSON.stringify(i.warmup))}</p>`:''}</details>`).join('')}</div>`:'<p class="helper">当前服务尚未发布扩展指标；现有快慢均线与价格阈值仍可使用。</p>'}`;
+  root.innerHTML=`<summary>支持的指标与参数（${indicators.length||'MA / 价格阈值'}）</summary><p class="helper">周期以 K 线根数计算。每根 K 线的时间由策略周期决定。</p>${indicators.length?`<div class="indicator-grid">${indicators.map(i=>`<details class="indicator-entry"><summary>${escape(i.label||i.name)} · ${escape(i.name)}${i.raw_only?' · 仅未复权限价数据':''}</summary><p>${escape(i.formula||i.description||i.note||'')}</p><p>参数：<code>${escape(Object.entries(i.params||i.parameters||{}).map(([key,p])=>`${key} = ${p.default}（${p.enum?p.enum.join(' / '):`${p.minimum}～${p.maximum}`}${p.type==='integer'?'，整数':''}）`).join('；')||'无需参数')}</code></p>${i.warmup?`<p>预热：${escape(typeof i.warmup==='string'?i.warmup:JSON.stringify(i.warmup))}</p>`:''}</details>`).join('')}</div>`:'<p class="helper">当前服务尚未发布扩展指标；现有快慢均线与价格阈值仍可使用。</p>'}`;
   for(const el of all('[data-field="rule-type"]'))if(hasConditional()&&!el.querySelector('option[value="conditional"]'))el.insertAdjacentHTML('beforeend','<option value="conditional">指标条件组合（预设 / 高级编辑）</option>');
 }
 const operand=(indicator,params={})=>({indicator,...(Object.keys(params).length?{params}:{})});
@@ -74,8 +77,8 @@ const rulePresets={
   boll:{label:'布林带下轨 / 中轨',note:'收盘价低于下轨入场，高于中轨离场。采用默认参数，可在高级编辑中修改。',buy:condition('lt',operand('CLOSE'),operand('BOLL_LOWER')),sell:condition('gt',operand('CLOSE'),operand('BOLL_MID'))},
   kdj:{label:'KDJ 金叉 / 死叉',note:'K 上穿 D 入场，下穿离场。采用默认参数，可在高级编辑中修改。',buy:condition('cross_above',operand('KDJ_K'),operand('KDJ_D')),sell:condition('cross_below',operand('KDJ_K'),operand('KDJ_D'))},
   ema:{label:'EMA 趋势',note:'EMA(5) 高于 EMA(20) 入场，低于或等于时离场。',buy:condition('gt',operand('EMA',{period:5}),operand('EMA',{period:20})),sell:condition('lte',operand('EMA',{period:5}),operand('EMA',{period:20}))},
-  volume:{label:'均线 + 日线量比',note:'收盘高于 MA(20) 且日线量比 > 1.5 入场，收盘低于 MA(20) 离场。日线量比不是盘口量比。',buy:{op:'and',conditions:[condition('gt',operand('CLOSE'),operand('MA',{period:20})),condition('gt',operand('VOLUME_RATIO',{period:5}),1.5)]},sell:condition('lt',operand('CLOSE'),operand('MA',{period:20}))},
-  first_limit:{label:'首个涨停收盘信号',note:'收盘确认首个涨停后，下一交易日开盘尝试入场；收盘跌破 MA(5) 离场。仅适用于含每日涨停价的未复权数据。',buy:condition('eq',operand('FIRST_LIMIT_UP'),1),sell:condition('lt',operand('CLOSE'),operand('MA',{period:5}))}
+  volume:{label:'均线 + 成交量比',note:'本根收盘价高于 MA(20) 且成交量超过此前 5 根均量的 1.5 倍时入场，低于 MA(20) 时离场。',buy:{op:'and',conditions:[condition('gt',operand('CLOSE'),operand('MA',{period:20})),condition('gt',operand('VOLUME_RATIO',{period:5}),1.5)]},sell:condition('lt',operand('CLOSE'),operand('MA',{period:20}))},
+  first_limit:{label:'首个涨停收盘信号（日线）',note:'收盘确认首个涨停后，下一交易日开盘尝试入场；收盘跌破 MA(5) 离场。适用于含每日涨停价的未复权日线。',buy:condition('eq',operand('FIRST_LIMIT_UP'),1),sell:condition('lt',operand('CLOSE'),operand('MA',{period:5}))}
 };
 function presetRules(key){const p=rulePresets[key]||rulePresets.rsi;return {type:'conditional',target_pct:50,stop_loss_pct:null,buy:structuredClone(p.buy),sell:structuredClone(p.sell)};}
 function conditionalError(r){
@@ -88,7 +91,7 @@ function conditionalError(r){
     if(!object(v))throw Error('比较两侧必须是指标或数值对象。');
     if('value' in v){if(Object.keys(v).length!==1||!numeric(v.value))throw Error('常量格式为 {"value": 有限数字}。');return;}
     if(Object.keys(v).some(k=>!['indicator','params','offset'].includes(k))||!names.has(v.indicator))throw Error('使用了当前服务不支持的指标或操作数字段。');
-    if('offset'in v&&(!Number.isInteger(v.offset)||v.offset<0||v.offset>250))throw Error('offset 仅允许过去 0～250 根日线。');
+    if('offset'in v&&(!Number.isInteger(v.offset)||v.offset<0||v.offset>250))throw Error('offset 仅允许过去 0～250 根 K 线。');
     if('params'in v&&!object(v.params))throw Error('指标参数必须是对象。');
     const definition=(T.cap.indicators||[]).find(i=>i.name===v.indicator),specs=definition?.params||{},params=v.params||{};
     for(const [key,p] of Object.entries(params)){
@@ -103,20 +106,104 @@ function conditionalError(r){
 }
 const opLabels={gt:'>',gte:'≥',lt:'<',lte:'≤',eq:'=',ne:'≠',cross_above:'上穿',cross_below:'下穿'};
 function explainCondition(c){if(!c)return '未填写';if(['and','or'].includes(c.op))return '('+c.conditions.map(explainCondition).join(c.op==='and'?' 且 ':' 或 ')+')';const val=v=>'value'in v?String(v.value):`${v.indicator}${Object.keys(v.params||{}).length?'('+Object.entries(v.params).map(([k,n])=>k+'='+n).join(', ')+')':''}${v.offset?'（前 '+v.offset+' 根）':''}`;return `${val(c.left)} ${opLabels[c.op]||c.op} ${val(c.right)}`;}
-function conditionalPreview(item){const error=conditionalDrafts.get(item.id)?.error;if(error)return `<p class="dsl-error">${escape(error)} 修正前不能确认或保存。</p>`;return `<p>入场：${escape(explainCondition(item.rules.buy))}</p><p>离场：${escape(explainCondition(item.rules.sell))}</p><p>目标仓位 ${pct(item.rules.target_pct)}；持仓时卖出优先，均不触发则保持。所有条件在收盘判断，下一日开盘执行。</p>`;}
-function conditionalFields(item){const draft=conditionalDrafts.get(item.id);return `<div class="conditional-editor"><label>常用条件预设<select data-field="conditional-preset"><option value="">选择预设会替换当前条件</option>${Object.entries(rulePresets).map(([key,p])=>`<option value="${key}">${escape(p.label)}</option>`).join('')}</select></label><div class="conditional-preview" role="status">${conditionalPreview(item)}</div><p class="helper">预设仓位为 50%。在高级编辑中调整指标、周期、仓位和止损。</p><details ${draft?.error?'open':''}><summary>高级编辑 · 条件 JSON</summary><label class="sr-only" for="dsl-${escape(item.id)}">指标条件 JSON</label><textarea id="dsl-${escape(item.id)}" class="conditional-json" data-field="conditional-json" spellcheck="false">${escape(draft?.text||JSON.stringify(item.rules,null,2))}</textarea><p class="helper">比较：gt / gte / lt / lte / eq / ne / cross_above / cross_below；组合：and / or。offset 仅引用过去日线，默认 0。指标参数与预热说明见上方目录。</p></details></div>`;}
+function conditionalPreview(item){
+  const error=conditionalDrafts.get(item.id)?.error;
+  if(error)return `<p class="dsl-error">${escape(error)} 修正前不能确认或保存。</p>`;
+  const timing=item.timeframe==='5m'?'5 分钟 K 线结束时判断。历史运行使用下一根开盘价，实时模拟使用信号后的有效报价。':'日线收盘时判断，下一交易日开盘尝试撮合。';
+  return `<p>入场：${escape(explainCondition(item.rules.buy))}</p><p>离场：${escape(explainCondition(item.rules.sell))}</p><p>目标仓位 ${pct(item.rules.target_pct)}。持仓时卖出优先，均不触发则保持。${timing}</p>`;
+}
+function conditionalFields(item){
+  const draft=conditionalDrafts.get(item.id),intraday=item.timeframe==='5m';
+  const presets=Object.entries(rulePresets).filter(([key])=>!intraday||key!=='first_limit');
+  const periods=intraday?'RSI(14) 和 MA(20) 分别使用 14 根和 20 根 5 分钟 K 线。首板、连板及收盘涨跌停状态适用于日线。':'周期以日线根数计算。';
+  return `<div class="conditional-editor"><label>常用条件预设<select data-field="conditional-preset"><option value="">选择预设会替换当前条件</option>${presets.map(([key,p])=>`<option value="${key}">${escape(p.label)}</option>`).join('')}</select></label><div class="conditional-preview" role="status">${conditionalPreview(item)}</div><p class="helper">预设仓位为 50%。${periods}可在高级编辑中调整参数。</p><details ${draft?.error?'open':''}><summary>高级编辑 · 条件 JSON</summary><label class="sr-only" for="dsl-${escape(item.id)}">指标条件 JSON</label><textarea id="dsl-${escape(item.id)}" class="conditional-json" data-field="conditional-json" spellcheck="false">${escape(draft?.text||JSON.stringify(item.rules,null,2))}</textarea><p class="helper">比较：gt / gte / lt / lte / eq / ne / cross_above / cross_below；组合：and / or。offset 仅引用过去的 K 线，默认 0。指标参数与预热说明见上方目录。</p></details></div>`;
+}
 function evidenceVersion(source,e){const original=source?.original_transcript||source?.transcript;const segment=Array.isArray(original)?original.find(s=>s.id===e.segment_id):null;if(e.transcript_version==='corrected'||e.text_version==='corrected'||e.version==='corrected'||(segment&&!segment.text.includes(e.quote)))return '校正稿引文 · 请对照原始转写';return '原文依据';}
 function originalMarkup(s){const rules=s?.strategy?.rules||[];return rules.map(r=>`<p>${escape(r.text)}</p>${(r.evidence||[]).map(e=>`<blockquote>“${escape(e.quote)}” · ${escape(e.segment_id)} · ${evidenceVersion(s,e)}</blockquote>`).join('')}`).join('')||'<p>无原文规则；这是你自行编写的手工策略。</p>';}
 function renderCandidates(){const term=q('#candidate-search').value.trim().toLowerCase();const rows=T.strategies.filter(s=>`${s.title} ${s.source_title||''} ${JSON.stringify(s.strategy)}`.toLowerCase().includes(term));q('#candidates').innerHTML=rows.length?rows.map(s=>`<article class="candidate"><h3>${escape(s.strategy?.title||s.title)}</h3>${s.source_title?`<p>来源资料：${escape(s.source_title)}</p>`:''}<p>草案版本 ${s.revision}${s.is_demo?' · 示例资料':''}${s.stale?' · 已过期，需重新提取':''}</p><details><summary>查看原规则与证据</summary>${originalMarkup(s)}</details><button class="secondary" data-add-source="${escape(s.id)}" ${s.stale?'disabled':''}>＋ 加入组合</button></article>`).join(''):`<p class="empty-copy">${term?'没有匹配草案。':'还没有策略草案。可先在资料区提取，或添加手工策略。'}</p>`;}
 function dirty(){T.dirty=true;q('#portfolio-save-state').textContent='有未保存修改';q('#portfolio-readiness').innerHTML='<p class="pending-text">修改后需保存，重新检查版本就绪状态。</p>';updateWeights();}
 function field(item,name,label,value,type='number',extra=''){return `<label>${label}<input data-field="${name}" type="${type}" value="${escape(value??'')}" ${extra}></label>`;}
-function ruleFields(item){const r=item.rules;if(r?.type==='conditional')return conditionalFields(item);if(!r)return '<p class="rule-note">尚未绑定执行规则。请根据原文自行选择并填写；未支持的条件不要勉强映射。</p>';return `<div class="form-grid rule-fields">${r.type==='ma'?field(item,'fast','快均线（日）',r.fast,'number','min="1" max="250" step="1"')+field(item,'slow','慢均线（日）',r.slow,'number','min="2" max="250" step="1"'):field(item,'buy_below','买入线（价格 ≤）',r.buy_below,'number','min="0.001" step="any"')+field(item,'sell_above','卖出线（价格 ≥）',r.sell_above,'number','min="0.001" step="any"')}${field(item,'target_pct','目标仓位（%）',r.target_pct,'number','min="0.01" max="100" step="any"')}${field(item,'stop_loss_pct','收盘止损（%，可留空）',r.stop_loss_pct,'number','min="0.01" max="99.99" step="any"')}</div><p class="rule-note">${r.type==='ma'?'快均线高于慢均线时持有目标仓位，否则空仓。':'收盘低于等于买入线时持有目标仓位，高于等于卖出线时空仓，中间保持上次目标。'}收盘止损基于此策略最近开仓信号价，下一根开盘执行。</p>`;}
+function ruleFields(item){const r=item.rules;if(r?.type==='conditional')return conditionalFields(item);if(!r)return '<p class="rule-note">尚未绑定执行规则。请根据原文自行选择并填写；未支持的条件不要勉强映射。</p>';return `<div class="form-grid rule-fields">${r.type==='ma'?field(item,'fast','快均线（根）',r.fast,'number','min="1" max="250" step="1"')+field(item,'slow','慢均线（根）',r.slow,'number','min="2" max="250" step="1"'):field(item,'buy_below','买入线（价格 ≤）',r.buy_below,'number','min="0.001" step="any"')+field(item,'sell_above','卖出线（价格 ≥）',r.sell_above,'number','min="0.001" step="any"')}${field(item,'target_pct','目标仓位（%）',r.target_pct,'number','min="0.01" max="100" step="any"')}${field(item,'stop_loss_pct','收盘止损（%，可留空）',r.stop_loss_pct,'number','min="0.01" max="99.99" step="any"')}</div><p class="rule-note">${r.type==='ma'?'快均线高于慢均线时持有目标仓位，否则空仓。':'收盘低于等于买入线时持有目标仓位，高于等于卖出线时空仓，中间保持上次目标。'}止损按 K 线结束价与最近的开仓信号价判断。</p>`;}
+function validClarifications(questions){
+  if(questions===undefined)return true;
+  const strings=(value,keys)=>value&&keys.every(key=>typeof value[key]==='string'&&value[key].trim());
+  const unique=(items,key)=>new Set(items.map(item=>item[key])).size===items.length;
+  return Array.isArray(questions)&&questions.every(question=>{
+    if(!strings(question,['id','segment_id','quote','field','question'])||!Array.isArray(question.options))return false;
+    const {options,custom_fields:fields=[]}=question;
+    return Array.isArray(fields)&&(options.length>0||fields.length>0)
+      &&options.every(option=>strings(option,['id','label'])&&option.id!=='custom')&&unique(options,'id')
+      &&fields.every(field=>strings(field,['name','label'])&&['min','max'].every(key=>field[key]==null||Number.isFinite(field[key]))
+        &&(field.step==null||field.step==='any'||(Number.isFinite(field.step)&&field.step>0)))&&unique(fields,'name');
+  })&&unique(questions,'id');
+}
+function validDecisions(decisions){
+  return decisions===undefined||Array.isArray(decisions)&&decisions.every(d=>d&&
+    ['question_id','segment_id','quote','option_id','effective_clause'].every(key=>typeof d[key]==='string')&&
+    d.values&&typeof d.values==='object'&&!Array.isArray(d.values)&&
+    Object.values(d.values).every(value=>typeof value==='string'||Number.isFinite(value))&&
+    (d.label===undefined||typeof d.label==='string')&&(d.reason===undefined||typeof d.reason==='string')&&
+    (d.basis===undefined||['assumption','evidence'].includes(d.basis))&&
+    (!d.support||['segment_id','quote'].every(key=>typeof d.support[key]==='string')));
+}
+function selectedChoices(result){
+  return new Map((result.decisions||[]).map(d=>[d.question_id,{
+    option:d.option_id,values:new Map(Object.entries(d.values))
+  }]));
+}
+function mappingState(item){
+  const existing=aiMappings.get(item.id);
+  if(existing)return existing;
+  const result=item.source_snapshot?.ai_mapping;
+  if(!item.mapping_version||result?.mapping_version!==item.mapping_version||!result.ready||
+    !validClarifications(result.clarifications)||!validDecisions(result.decisions))return;
+  const state={result,choices:selectedChoices(result)};
+  aiMappings.set(item.id,state);
+  return state;
+}
+function decisionsMarkup(result,source){
+  if(!result?.decisions?.length)return '';
+  const questions=result.clarifications||[];
+  return `<ul class="ai-decisions" aria-label="采用的术语定义">${result.decisions.map(d=>{
+    const question=questions.find(q=>q.id===d.question_id);
+    const label=d.label||question?.options.find(option=>option.id===d.option_id)?.label||d.effective_clause;
+    const basis=d.basis==='assumption'?'AI 假设':d.basis==='evidence'?'原文支持':'人工选择';
+    return `<li><strong>${basis}</strong><dl><dt>原文 · ${escape(d.segment_id)}</dt><dd>“${escape(d.quote)}”</dd><dt>采用定义</dt><dd>${escape(label)}</dd>${label!==d.effective_clause?`<dt>执行条件</dt><dd>${escape(d.effective_clause)}</dd>`:''}${d.reason?`<dt>采用理由</dt><dd>${escape(d.reason)}</dd>`:''}${d.support?`<dt>${evidenceVersion(source,d.support)} · ${escape(d.support.segment_id)}</dt><dd>“${escape(d.support.quote)}”</dd>`:''}</dl></li>`;
+  }).join('')}</ul>`;
+}
+function clarificationMarkup(item,m,disabled){
+  const questions=m?.result?.clarifications;
+  if(!questions?.length)return '';
+  const rows=questions.map((question,index)=>{
+    const {id,quote,segment_id,options,custom_fields:fields=[]}=question;
+    const saved=m.choices.get(id),custom=saved?.option==='custom';
+    const control=`clarification-${item.id}-${index}`;
+    const choices=options.map(option=>`<option value="${escape(option.id)}" ${saved?.option===option.id?'selected':''}>${escape(option.label)}</option>`).join('');
+    const customFields=fields.map(field=>`<label>${escape(field.label)}<input type="number" data-ai-custom="${escape(field.name)}" value="${escape(saved?.values.get(field.name))}" ${field.min==null?'':`min="${escape(field.min)}"`} ${field.max==null?'':`max="${escape(field.max)}"`} step="${escape(field.step??'any')}" required ${custom?'':'disabled'}></label>`).join('');
+    return `<fieldset class="ai-clarification" data-ai-question="${escape(id)}" ${disabled?'disabled':''}><legend>原文 · ${escape(segment_id)}</legend><blockquote>“${escape(quote)}”</blockquote><label for="${escape(control)}">${escape(question.question)}</label><select id="${escape(control)}" data-ai-option required><option value="">请选择判定口径</option>${choices}${fields.length?`<option value="custom" ${custom?'selected':''}>自定义</option>`:''}</select>${fields.length?`<div class="ai-custom-fields" ${custom?'':'hidden'}>${customFields}</div>`:''}</fieldset>`;
+  }).join('');
+  const form=`<form class="ai-clarifications" data-ai-clarifications="${escape(item.id)}">${rows}<button type="submit" class="secondary" ${disabled?'disabled':''}>${m.loading?'正在校验…':'应用选择并校验'}</button></form>`;
+  return m.result.ready?`<details class="ai-adjust" ${m.adjusting?'open':''}><summary>人工调整口径</summary>${form}</details>`:form;
+}
 function aiMappingMarkup(item){
   if(!item.source_id)return '';
-  const m=aiMappings.get(item.id),r=m?.result,stale=T.strategies.find(s=>s.id===item.source_id)?.stale;
-  return `<div class="ai-mapping"><button type="button" class="secondary" data-ai-mapping="${escape(item.id)}" ${m?.loading||stale?'disabled':''}>${m?.loading?'AI 正在生成…':'AI 生成执行参数'}</button><p>${stale?'来源草案已过期，请重新选择最新草案。':'将该草案与证据发给已配置模型。建议会替换当前参数，仍需你核对并手动确认、保存。'}</p><div class="ai-mapping-feedback" role="status" aria-live="polite">${m?.message?`<p class="${m.error?'ai-error':''}">${escape(m.message)}</p>`:''}${r?`<p class="helper">${escape(r.provider)} / ${escape(r.model)} · 来源版本 ${escape(r.source_revision)}</p>${r.questions?.length?`<ul class="ai-questions">${r.questions.map(x=>`<li>${escape(x)}</li>`).join('')}</ul>`:''}${r.evidence?.length?`<details><summary>查看参数证据（${r.evidence.length}）</summary>${r.evidence.map(e=>`<p class="helper">${escape(e.field)} · ${escape(e.segment_id)} · ${evidenceVersion(item.source_snapshot,e)}</p><blockquote>“${escape(e.quote)}”</blockquote>`).join('')}</details>`:''}`:''}</div></div>`;
+  const m=mappingState(item),r=m?.result,source=T.strategies.find(s=>s.id===item.source_id);
+  const questions=m?.attemptQuestions??r?.questions;
+  const stale=source?.stale||(!source&&T.loaded);
+  const disabled=m?.loading||stale?'disabled':'';
+  return `<div class="ai-mapping"><div class="ai-mapping-actions action-row">
+    <button type="button" class="primary" data-ai-complete="${escape(item.id)}" ${disabled}>${m?.loading&&m.mode==='complete'?'AI 正在补全…':'让 AI 补全并生成执行规则'}</button>
+    <button type="button" class="secondary" data-ai-mapping="${escape(item.id)}" ${disabled}>${m?.loading&&m.mode==='prepare'?'正在核对…':'AI 生成执行参数 · 人工选口径'}</button>
+  </div><p>${stale?'来源草案已过期，请重新选择最新草案。':'回填后请核对原文和执行规则，再确认并保存。'}</p>
+  <div class="ai-mapping-feedback" role="status" aria-live="polite">${m?.message?`<p class="${m.error?'ai-error':''}">${escape(m.message)}</p>`:''}${questions?.length?`<ul class="ai-questions">${questions.map(x=>`<li>${escape(x)}</li>`).join('')}</ul>`:''}</div>
+  ${r?`<p class="helper">${escape(r.provider)} / ${escape(r.model)} · 来源版本 ${escape(r.source_revision)}</p>${decisionsMarkup(r,item.source_snapshot)}${r.evidence?.length?`<details class="ai-mapping-evidence"><summary>查看参数证据（${r.evidence.length}）</summary>${r.evidence.map(e=>`<p class="helper">${escape(e.field)} · ${escape(e.segment_id)} · ${evidenceVersion(item.source_snapshot,e)}</p><blockquote>“${escape(e.quote)}”</blockquote>`).join('')}</details>`:''}`:''}
+  ${clarificationMarkup(item,m,m?.loading||stale)}</div>`;
 }
-function renderMapping(item){const el=all('[data-item]').find(el=>el.dataset.item===item.id);if(!el)return;const old=el.querySelector('.ai-mapping');if(old)old.outerHTML=aiMappingMarkup(item);const confirm=el.querySelector('[data-field="confirmed"]');confirm.disabled=!!aiMappings.get(item.id)?.blocked||!!conditionalDrafts.get(item.id)?.error;confirm.checked=item.confirmed;}
+function confirmationDisabled(item){
+  const m=aiMappings.get(item.id);
+  return !!(m?.blocked||m?.loading||conditionalDrafts.get(item.id)?.error);
+}
+function renderMapping(item){const el=all('[data-item]').find(el=>el.dataset.item===item.id);if(!el)return;const old=el.querySelector('.ai-mapping');if(old)old.outerHTML=aiMappingMarkup(item);const confirm=el.querySelector('[data-field="confirmed"]');confirm.disabled=confirmationDisabled(item);confirm.checked=item.confirmed;}
 function validMappingRules(r){
   if(r?.type==='conditional')return hasConditional()&&!conditionalError(r)?structuredClone(r):null;
   if(!r||!['ma','threshold'].includes(r.type))return null;
@@ -130,48 +217,170 @@ function validMappingRules(r){
   if(!number(r.buy_below)||!number(r.sell_above)||r.buy_below<=0||r.sell_above<=r.buy_below)return null;
   return {...base,buy_below:r.buy_below,sell_above:r.sell_above};
 }
-async function generateMapping(item){
-  if(!item?.source_id||aiMappings.get(item.id)?.loading)return;
-  const controller=new AbortController(),m={loading:true,controller,message:'正在核对日线买卖条件、仓位和原文证据…'};
+async function generateMapping(item,mode='prepare',answers){
+  if(!item?.source_id)return;
+  const previous=mappingState(item);
+  if(previous?.loading)return;
+  const controller=new AbortController(),m={...previous,loading:true,controller,mode,choices:previous?.choices||new Map(),error:false,attemptQuestions:null,
+    message:answers?'正在应用已选择的口径并校验执行参数…':mode==='complete'?'正在根据原文和可用定义补全执行规则…':'正在核对买卖条件、仓位和原文证据…'};
   aiMappings.set(item.id,m);renderMapping(item);
   const current=()=>aiMappings.get(item.id)===m&&T.items.includes(item)&&!controller.signal.aborted;
   try{
-    const response=await fetch(`/api/ai/strategies/${encodeURIComponent(item.source_id)}/mapping`,{method:'POST',signal:controller.signal});
+    const requestOptions={method:'POST',signal:controller.signal};
+    if(answers||mode==='complete'){
+      const revision=item.source_snapshot?.revision;
+      if(!Number.isInteger(revision))throw Error('缺少来源草案版本，请刷新后重新选择。');
+      const payload={source_revision:revision};
+      if(answers){
+        payload.answers=answers;
+        if(previous.result.mapping_version)payload.mapping_version=previous.result.mapping_version;
+      }
+      requestOptions.headers={'Content-Type':'application/json'};
+      requestOptions.body=JSON.stringify(payload);
+    }
+    const endpoint=`/api/ai/strategies/${encodeURIComponent(item.source_id)}/mapping`;
+    const response=await fetch(mode==='complete'?endpoint+'/complete':endpoint,requestOptions);
     const r=await response.json().catch(()=>null);if(!current())return;
     if(!response.ok)throw Error(typeof r?.detail==='string'?r.detail:`AI 参数生成失败（HTTP ${response.status}）`);
     if(!r||r.source_id!==item.source_id||r.source_revision!==item.source_snapshot?.revision)throw Error('来源版本已变化，此建议未回填。请刷新草案后重新选择。');
     const latest=await request('/strategies');if(!current())return;
     const source=latest.find(s=>s.id===item.source_id);
     if(!source||source.stale||source.revision!==r.source_revision)throw Error('来源草案已过期，此建议未回填。请刷新后重新选择。');
-    if(!Array.isArray(r.questions)||r.questions.some(x=>typeof x!=='string')||!Array.isArray(r.evidence)||r.evidence.some(e=>!e||['field','segment_id','quote'].some(k=>typeof e[k]!=='string'))||typeof r.mapping_note!=='string')throw Error('AI 返回格式不完整，当前参数已保留。');
-    const rules=validMappingRules(r.rules);
-    if(r.ready===true&&!rules)throw Error('AI 返回了不支持或无效的执行规则，当前参数已保留。');
-    T.strategies=latest;m.result=r;m.blocked=r.ready!==true||r.questions.length>0||!rules;
-    item.confirmed=false;item.rules=m.blocked?null:rules;conditionalDrafts.delete(item.id);
-    item.mapping_note=(r.mapping_note+(m.blocked&&r.questions.length?' 待核对：'+r.questions.join('；'):'')).slice(0,4000);
-    m.message=m.blocked?'建议尚不完整，未绑定执行规则。请先处理缺项或不支持的条件。':'参数已回填，尚未确认、未保存。请核对原文与证据后手动确认。';
-    m.error=m.blocked;dirty();
+    if(r.mapping_version&&source.ai_mapping?.mapping_version!==r.mapping_version)throw Error('术语定义已变化，此建议未回填。请重新生成执行参数。');
+    if(!Array.isArray(r.questions)||r.questions.some(x=>typeof x!=='string')||!Array.isArray(r.evidence)||r.evidence.some(e=>!e||['field','segment_id','quote'].some(k=>typeof e[k]!=='string'))||typeof r.mapping_note!=='string'||!validClarifications(r.clarifications)||!validDecisions(r.decisions))throw Error('AI 返回格式不完整，当前参数已保留。');
+    const rules=validMappingRules(r.rules),timeframe=r.timeframe??'daily';
+    if(r.ready===true&&(!rules||timeframe!=='daily'))throw Error('AI 返回了不支持或无效的执行规则，当前参数已保留。');
+    T.strategies=latest;
+    const blocked=r.ready!==true||r.questions.length>0||!rules;
+    if(blocked&&answers&&previous.result.ready){
+      m.attemptQuestions=r.questions;
+      m.message='新选择未通过校验，当前执行规则已保留。';
+      m.error=true;
+      return;
+    }
+    m.result=r;m.blocked=blocked;
+    item.confirmed=false;
+    if(!m.blocked){
+      m.choices=selectedChoices(r);m.adjusting=false;
+      item.rules=rules;item.timeframe=timeframe;item.source_snapshot=source;
+      if(r.mapping_version)item.mapping_version=r.mapping_version;
+      else delete item.mapping_version;
+      item.mapping_note=r.mapping_note.slice(0,4000);
+      conditionalDrafts.delete(item.id);
+    }
+    m.message=m.blocked?(r.clarifications?.length?'可人工选择下列判定口径。':'请先处理缺项或不支持的条件。'):'参数已回填，尚未确认、未保存。请核对原文与证据后手动确认。';
+    m.error=m.blocked&&!r.clarifications?.length;dirty();
     const editor=all('[data-item]').find(el=>el.dataset.item===item.id);
-    if(editor){editor.querySelector('[data-field="rule-type"]').value=item.rules?.type||'';editor.querySelector('.rule-editor').innerHTML=ruleFields(item);editor.querySelector('[data-field="mapping_note"]').value=item.mapping_note;}
+    if(editor){
+      editor.querySelector('[data-field="rule-type"]').value=item.rules?.type||'';
+      if(!m.blocked)editor.querySelector('[data-field="timeframe"]').value=timeframe;
+      editor.querySelector('.rule-editor').innerHTML=ruleFields(item);
+      editor.querySelector('[data-field="mapping_note"]').value=item.mapping_note;
+    }
   }catch(e){if(current()){m.message=e.name==='AbortError'?'请求已取消。':e.message||'AI 服务连接失败，当前参数已保留。';m.error=true;}}
   finally{if(current()){m.loading=false;renderMapping(item);}}
 }
-function renderItems(){q('#portfolio-items').innerHTML=T.items.length?T.items.map(item=>`<article class="portfolio-item ${item.enabled?'':'item-disabled'}" data-item="${escape(item.id)}"><div class="item-heading"><label class="check"><input data-field="enabled" type="checkbox" ${item.enabled?'checked':''}>启用 · ${escape(item.name)}</label><button data-remove="${escape(item.id)}" class="quiet">移除</button></div><details class="source-rule"><summary>${item.source_id?'原草案与证据快照':'手工策略 · 自行编写'}${item.source_snapshot?.revision?` · v${item.source_snapshot.revision}`:''}</summary>${originalMarkup(item.source_snapshot)}</details>${aiMappingMarkup(item)}${field(item,'name','策略名称',item.name,'text','maxlength="100"')}<label>执行规则<select data-field="rule-type"><option value="">未绑定 · 请明确选择</option><option value="ma" ${item.rules?.type==='ma'?'selected':''}>快慢均线趋势</option><option value="threshold" ${item.rules?.type==='threshold'?'selected':''}>价格阈值</option>${hasConditional()||item.rules?.type==='conditional'?`<option value="conditional" ${item.rules?.type==='conditional'?'selected':''}>指标条件组合（预设 / 高级编辑）</option>`:''}</select></label><div class="rule-editor">${ruleFields(item)}</div><label>权重（%）<div class="weight-input"><input aria-label="${escape(item.name)}权重滑杆" type="range" min="0" max="100" step="0.1" data-field="weight-range" value="${item.weight}" ${q('#portfolio-mode').value==='equal'?'disabled':''}><input aria-label="${escape(item.name)}权重百分比" data-field="weight" type="number" min="0" max="100" step="any" value="${item.weight}" ${q('#portfolio-mode').value==='equal'?'disabled':''}></div></label><label>映射说明<input data-field="mapping_note" value="${escape(item.mapping_note)}" placeholder="说明原文如何映射；未覆盖条件需先解决"></label><label class="check"><input data-field="confirmed" type="checkbox" ${item.confirmed?'checked':''} ${aiMappings.get(item.id)?.blocked||conditionalDrafts.get(item.id)?.error?'disabled':''}>我已核对原文、全部参数与条件，确认此映射可执行</label></article>`).join(''):'<p class="empty-copy">添加草案或手工策略，开始建立组合。</p>';updateWeights();}
+function renderItems(){q('#portfolio-items').innerHTML=T.items.length?T.items.map(item=>`<article class="portfolio-item ${item.enabled?'':'item-disabled'}" data-item="${escape(item.id)}"><div class="item-heading"><label class="check"><input data-field="enabled" type="checkbox" ${item.enabled?'checked':''}>启用 · ${escape(item.name)}</label><button data-remove="${escape(item.id)}" class="quiet">移除</button></div><details class="source-rule"><summary>${item.source_id?'原草案与证据快照':'手工策略 · 自行编写'}${item.source_snapshot?.revision?` · v${item.source_snapshot.revision}`:''}</summary>${originalMarkup(item.source_snapshot)}</details>${aiMappingMarkup(item)}${field(item,'name','策略名称',item.name,'text','maxlength="120"')}<label>执行规则<select data-field="rule-type"><option value="">未绑定 · 请明确选择</option><option value="ma" ${item.rules?.type==='ma'?'selected':''}>快慢均线趋势</option><option value="threshold" ${item.rules?.type==='threshold'?'selected':''}>价格阈值</option>${hasConditional()||item.rules?.type==='conditional'?`<option value="conditional" ${item.rules?.type==='conditional'?'selected':''}>指标条件组合（预设 / 高级编辑）</option>`:''}</select></label><label>策略周期<select data-field="timeframe"><option value="daily" ${item.timeframe!=='5m'?'selected':''}>日线</option><option value="5m" ${item.timeframe==='5m'?'selected':''}>5 分钟线</option></select></label><div class="rule-editor">${ruleFields(item)}</div><label>权重（%）<div class="weight-input"><input aria-label="${escape(item.name)}权重滑杆" type="range" min="0" max="100" step="0.1" data-field="weight-range" value="${item.weight}" ${q('#portfolio-mode').value==='equal'?'disabled':''}><input aria-label="${escape(item.name)}权重百分比" data-field="weight" type="number" min="0" max="100" step="any" value="${item.weight}" ${q('#portfolio-mode').value==='equal'?'disabled':''}></div></label><label>映射说明<input data-field="mapping_note" value="${escape(item.mapping_note)}" placeholder="说明原文如何映射；未覆盖条件需先解决"></label><label class="check"><input data-field="confirmed" type="checkbox" ${item.confirmed?'checked':''} ${confirmationDisabled(item)?'disabled':''}>我已核对原文、全部参数与条件，确认此映射可执行</label></article>`).join(''):'<p class="empty-copy">添加草案或手工策略，开始建立组合。</p>';updateWeights();}
 function updateWeights(){const enabled=T.items.filter(i=>i.enabled);const total=enabled.reduce((n,i)=>n+Number(i.weight||0),0);q('#weight-total').textContent=enabled.length?`${enabled.length} 项启用 · ${q('#portfolio-mode').value==='equal'?`各占 ${pct(100/enabled.length)}`:`合计 ${pct(total)}`}`:'尚无启用策略';}
-function renderReadiness(p){const r=p.readiness;q('#portfolio-readiness').innerHTML=`<div class="readiness ${r.ready?'':'bad'}"><strong>${r.ready?'此版本已就绪':'此版本尚不能运行'} · v${p.revision}</strong>${r.errors.length?`<ul>${r.errors.map(x=>`<li>${escape(x)}</li>`).join('')}</ul>`:''}${r.warnings.map(x=>`<p>${escape(x)}</p>`).join('')}</div>`;}
+function renderReadiness(p){const r=p.readiness;q('#portfolio-readiness').innerHTML=`<div class="readiness ${r.ready?'':'bad'}"><strong>${r.ready?'此版本已就绪':'此版本尚不能运行'} · v${p.revision}</strong>${r.errors.length?`<ul>${r.errors.map(x=>`<li>${escape(x)}</li>`).join('')}</ul>`:''}${r.warnings.map(x=>`<p>${escape(x)}</p>`).join('')}${r.ready?'<div class="action-row"><a class="button-link" data-run-workspace="backtest" href="#backtest">用此版本回测</a><a class="button-link" data-run-workspace="paper" href="#paper">用此版本模拟</a></div>':''}</div>`;}
 function editPortfolio(p){cancelMappings();conditionalDrafts.clear();T.portfolio=p;T.items=structuredClone(p?.items||[]);q('#portfolio-name').value=p?.name||'';q('#portfolio-mode').value=p?.mode||'equal';q('#conflict-policy').value=p?.conflict_policy||'block';T.dirty=false;q('#portfolio-save-state').textContent=p?`已保存 · v${p.revision}`:'新组合 · 未保存';q('#portfolio-select').value=p?.id||'';q('#portfolio-readiness').innerHTML='';if(p)renderReadiness(p);renderItems();}
 function allowPortfolioLeave(){return !T.dirty||window.confirm('当前组合有未保存修改，确定放弃并切换组合吗？');}
+q('#portfolio-items').addEventListener('submit',e=>{
+  const form=e.target.closest('[data-ai-clarifications]');
+  if(!form)return;
+  e.preventDefault();
+  const answers=[...form.querySelectorAll('[data-ai-question]')].map(row=>{
+    const option_id=row.querySelector('[data-ai-option]').value;
+    const answer={question_id:row.dataset.aiQuestion,option_id};
+    if(option_id==='custom')answer.values=Object.fromEntries([...row.querySelectorAll('[data-ai-custom]')].map(input=>[input.dataset.aiCustom,input.valueAsNumber]));
+    return answer;
+  });
+  generateMapping(T.items.find(item=>item.id===form.dataset.aiClarifications),'manual',answers);
+});
+q('#portfolio-items').addEventListener('toggle',e=>{
+  if(!e.target.matches('.ai-adjust'))return;
+  const item=e.target.closest('[data-item]'),m=aiMappings.get(item?.dataset.item);
+  if(m)m.adjusting=e.target.open;
+},true);
 q('#candidate-search').addEventListener('input',renderCandidates);
 q('#candidates').addEventListener('click',e=>{const b=e.target.closest('[data-add-source]');if(!b)return;const s=T.strategies.find(x=>x.id===b.dataset.addSource);addItem(s);});
-function addItem(s){if(T.items.length>=20){notify('每个组合最多 20 项策略。',true);return;}T.items.push({id:uid(),name:s?.strategy?.title||s?.title||`手工策略 ${T.items.length+1}`,source_id:s?.id||null,source_snapshot:s||null,enabled:true,weight:0,confirmed:false,mapping_note:'',rules:null});dirty();renderItems();}
+function nextItemName(title){
+  const occupied=new Set(T.items.map(item=>item.name.trim().toLowerCase()));
+  const base=[...title.trim()].slice(0,120);
+  let name=base.join('').trimEnd();
+  for(let number=2;occupied.has(name.toLowerCase());number++){
+    const suffix=` (${number})`;
+    name=base.slice(0,120-suffix.length).join('').trimEnd()+suffix;
+  }
+  return name;
+}
+function addItem(s){
+  if(T.items.length>=20){notify('每个组合最多 20 项策略。',true);return;}
+  const title=s?.strategy?.title||s?.title||`手工策略 ${T.items.length+1}`;
+  const item={id:uid(),name:nextItemName(title),source_id:s?.id||null,source_snapshot:s||null,enabled:true,weight:0,confirmed:false,mapping_note:'',rules:null};
+  T.items.push(item);dirty();renderItems();return item;
+}
+function prepareExecution(e,mode){
+  const sourceDocument=state.current;
+  task(e.currentTarget,async()=>{
+    updateButtons();
+    await load(true);
+    if(T.workspace!=='materials'||state.current!==sourceDocument||state.dirty)return;
+    const source=T.strategies.find(s=>s.id===sourceDocument.strategy_id);
+    if(!source||source.stale||source.revision!==sourceDocument.strategy_revision)throw Error('草案已变化。请重新打开资料并检查最新草案。');
+    let item=T.items.find(i=>i.source_id===source.id);
+    if(item&&mode==='prepare'){location.hash='portfolio';return;}
+    if(!item){
+      if(!allowPortfolioLeave())return;
+      editPortfolio(null);
+      q('#portfolio-name').value=source.title.slice(0,100);
+      item=addItem(source);
+    }
+    location.hash='portfolio';
+    await generateMapping(item,mode);
+  }).finally(updateButtons);
+}
+q('#prepare-execution').addEventListener('click',e=>prepareExecution(e,'prepare'));
+q('#complete-execution').addEventListener('click',e=>prepareExecution(e,'complete'));
+q('#portfolio-readiness').addEventListener('click',e=>{
+  const link=e.target.closest('[data-run-workspace]');
+  if(!link||!T.portfolio?.readiness.ready||T.dirty)return;
+  market?.selectPortfolio(link.dataset.runWorkspace,T.portfolio.id);
+  q('#'+link.dataset.runWorkspace+'-portfolio').value=T.portfolio.id;
+  if(link.dataset.runWorkspace==='backtest'){
+    q('#research-portfolio').value=T.portfolio.id;
+    if(!T.datasets.some(isResearch)){q('#backtest-mode').value='strict';backtestMode();}
+    researchRuleNote();
+    updateResearchControls();
+  }
+});
 wire('add-manual',()=>addItem());
-q('#portfolio-items').addEventListener('click',e=>{const ai=e.target.closest('[data-ai-mapping]');if(ai){generateMapping(T.items.find(x=>x.id===ai.dataset.aiMapping));return;}const b=e.target.closest('[data-remove]');if(b){const item=T.items.find(x=>x.id===b.dataset.remove);if(item)invalidateMapping(item);T.items=T.items.filter(x=>x.id!==b.dataset.remove);dirty();renderItems();}});
+q('#portfolio-items').addEventListener('click',e=>{const ai=e.target.closest('[data-ai-mapping], [data-ai-complete]');if(ai){const {aiMapping,aiComplete}=ai.dataset;generateMapping(T.items.find(x=>x.id===(aiComplete??aiMapping)),aiComplete?'complete':'prepare');return;}const b=e.target.closest('[data-remove]');if(b){const item=T.items.find(x=>x.id===b.dataset.remove);if(item)invalidateMapping(item);T.items=T.items.filter(x=>x.id!==b.dataset.remove);dirty();renderItems();}});
 q('#portfolio-items').addEventListener('input',e=>{
+  const row=e.target.closest('[data-ai-question]');
+  if(row){
+    const m=aiMappings.get(row.closest('[data-item]').dataset.item),id=row.dataset.aiQuestion;
+    if(!m||m.loading)return;
+    const saved=m.choices.get(id)||{option:'',values:new Map()};
+    if(e.target.hasAttribute('data-ai-option')){
+      saved.option=e.target.value;
+      const custom=row.querySelector('.ai-custom-fields');
+      if(custom){
+        custom.hidden=saved.option!=='custom';
+        for(const input of custom.querySelectorAll('input'))input.disabled=custom.hidden;
+      }
+    }else if(e.target.hasAttribute('data-ai-custom')){
+      saved.values.set(e.target.dataset.aiCustom,e.target.value);
+    }
+    m.choices.set(id,saved);
+    return;
+  }
   const f=e.target.dataset.field;if(!f)return;const el=e.target.closest('[data-item]'),item=T.items.find(x=>x.id===el.dataset.item);let v=e.target.type==='checkbox'?e.target.checked:e.target.value;
   if(!item)return;const mapping=aiMappings.get(item.id);if(mapping?.loading){invalidateMapping(item);aiMappings.set(item.id,{message:'你已修改此策略，之前的 AI 请求已取消；需要时可重新生成。'});}else if(mapping?.blocked&&['rule-type','mapping_note','fast','slow','buy_below','sell_above','target_pct','stop_loss_pct'].includes(f))invalidateMapping(item);
   if(f==='rule-type'){conditionalDrafts.delete(item.id);item.rules=v==='conditional'?presetRules('rsi'):v?{type:v,target_pct:null,stop_loss_pct:null,...(v==='ma'?{fast:null,slow:null}:{buy_below:null,sell_above:null})}:null;el.querySelector('.rule-editor').innerHTML=ruleFields(item);}
   else if(f==='conditional-preset'){if(!v)return;invalidateMapping(item);conditionalDrafts.delete(item.id);item.rules=presetRules(v);el.querySelector('.rule-editor').innerHTML=ruleFields(item);notify(rulePresets[v].note);}
   else if(f==='conditional-json'){invalidateMapping(item);let error='',parsed;try{if(v.length>24000)throw Error('条件 JSON 过长。');parsed=JSON.parse(v);error=conditionalError(parsed);}catch(e){error=e.message;}conditionalDrafts.set(item.id,{text:v,error});if(!error)item.rules=parsed;el.querySelector('.conditional-preview').innerHTML=conditionalPreview(item);}
+  else if(f==='timeframe'){item.timeframe=v;el.querySelector('.rule-editor').innerHTML=ruleFields(item);}
   else if(['enabled','confirmed','name','mapping_note'].includes(f))item[f]=v;
   else if(f==='weight'||f==='weight-range'){item.weight=v===''?0:Number(v);el.querySelector('[data-field="weight"]').value=item.weight;el.querySelector('[data-field="weight-range"]').value=item.weight;}
   else if(item.rules)item.rules[f]=v===''?null:Number(v);
@@ -185,13 +394,17 @@ wire('new-portfolio',()=>{if(allowPortfolioLeave())editPortfolio(null);});
 function normalize(equal){const rows=T.items.filter(i=>i.enabled);const total=rows.reduce((n,i)=>n+i.weight,0);let used=0;rows.forEach((i,k)=>{i.weight=k===rows.length-1?Number((100-used).toFixed(6)):Number((equal||!total?100/rows.length:i.weight/total*100).toFixed(6));used+=i.weight;});dirty();renderItems();}
 wire('equal-weights',()=>normalize(true));wire('normalize-weights',()=>normalize(false));
 wire('save-portfolio',async()=>{
+  if(T.items.some(i=>aiMappings.get(i.id)?.loading))throw Error('请等待执行规则校验完成，再保存组合。');
   if(T.items.some(i=>conditionalDrafts.get(i.id)?.error))throw Error('请先修正条件 JSON 中的错误，再保存组合。');
   cancelMappings();renderItems();
   const name=q('#portfolio-name').value.trim();if(!name)throw Error('请填写组合名称。');
   const body={name,mode:q('#portfolio-mode').value,conflict_policy:q('#conflict-policy').value,items:T.items.map(({source_snapshot,effective_weight,...item})=>item)};
   if(T.portfolio)body.revision=T.portfolio.revision;
   const p=await request('/portfolios'+(T.portfolio?'/'+T.portfolio.id:''),body,T.portfolio?'PUT':'POST');
-  editPortfolio(p);T.portfolios=await request('/portfolios');fillSelects();notify(`组合已保存为 v${p.revision}。${p.readiness.ready?'可用于回测与模拟。':'请处理就绪检查中的问题。'}`);
+  const index=T.portfolios.findIndex(saved=>saved.id===p.id);
+  if(index===-1)T.portfolios.unshift(p);
+  else T.portfolios[index]=p;
+  editPortfolio(p);fillSelects();notify(`组合已保存为 v${p.revision}。${p.readiness.ready?'可用于回测与模拟。':'请处理就绪检查中的问题。'}`);
 });
 wire('refresh-trading',async()=>{await load(true);if(T.portfolio&&!T.dirty){const p=await request('/portfolios/'+T.portfolio.id);editPortfolio(p);}notify('草案与已保存组合已刷新。');});
 function costsMarkup(prefix){return `<details class="cost-settings"><summary>费用与滑点假设（可调整）</summary><div class="form-grid"><label>佣金（基点 / 万分之一）<input id="${prefix}-commission" type="number" min="0" max="100" step="any" value="3" required></label><label>单笔最低佣金（${prefix==='research'?'计价单位':'元'}）<input id="${prefix}-minimum" type="number" min="0" max="1000" step="any" value="5" required></label><label>卖出税费（基点）<input id="${prefix}-tax" type="number" min="0" max="100" step="any" value="5" required></label><label>滑点（基点）<input id="${prefix}-slippage" type="number" min="0" max="100" step="any" value="0" required></label></div><p>这是本次运行的明确假设，不是自动更新的税费规则。买入按 100 股整手，T+1；限价、停牌和无量会保守阻止成交。</p></details>`;}
@@ -280,8 +493,17 @@ q('#backtest-dataset').addEventListener('change',()=>{const d=T.datasets.find(d=
 q('#backtest-symbol').addEventListener('change',()=>syncDates('backtest'));
 q('#backtest-form').addEventListener('submit',e=>{e.preventDefault();task(e.submitter,async()=>{q('#backtest-progress').textContent='正在计算…';try{const r=await request('/backtests',runBody('backtest'));T.runs=await request('/backtests');fillSelects();q('#backtest-history').value=r.id;renderRun(r,'backtest-result');revealResult('backtest-result');notify('回测已完成，结果与参数已保存在本机。');}finally{q('#backtest-progress').textContent='';}});});
 q('#backtest-history').addEventListener('change',e=>task(null,async()=>{if(e.target.value){renderRun(await request('/backtests/'+e.target.value),'backtest-result');revealResult('backtest-result');}else q('#backtest-result').innerHTML='<p class="empty-copy">选择已完成的回测，查看保存的盈亏与成交记录。</p>';}));
-function modeHelp(){q('#paper-mode-help').textContent=q('#paper-mode').value==='replay'?'逐日回放历史行情，可单步或连续运行。':'根据新收到的已收盘日线生成信号，下一交易日开盘模拟撮合。';q('#paper-feed').disabled=q('#paper-mode').value==='replay';if(q('#paper-mode').value==='replay')q('#paper-feed').value='csv';}
+function modeHelp(){const replay=q('#paper-mode').value==='replay';q('#paper-mode-help').textContent=replay?'逐日回放历史行情，可单步或连续运行。':'根据新收到的已收盘日线生成信号，下一交易日开盘模拟撮合。';q('#paper-demo-dataset').hidden=!replay;q('#paper-feed').disabled=replay;if(replay)q('#paper-feed').value='csv';}
 q('#paper-mode').addEventListener('change',modeHelp);modeHelp();
+wire('paper-demo-dataset',async()=>{
+  await load();
+  let d=T.datasets.find(d=>d.is_demo&&!isResearch(d)&&(!d.allowed_modes||d.allowed_modes.includes('replay')));
+  if(!d){d=await request('/datasets/demo',{});T.datasets=await request('/datasets');fillSelects();}
+  if(q('#paper-mode').value!=='replay')return;
+  q('#paper-dataset').value=d.id;
+  q('#paper-symbol').value=d.symbols[0];
+  notify('演示行情已载入，可以创建历史回放账户。');
+});
 q('#paper-external-jump').addEventListener('click',()=>{const title=q('#pex-title');if(title){title.tabIndex=-1;title.focus({preventScroll:true});title.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth',block:'start'});}});
 q('#paper-form').addEventListener('submit',e=>{e.preventDefault();task(e.submitter,async()=>{const s=await request('/paper/sessions',{...runBody('paper'),name:q('#paper-name').value.trim(),mode:q('#paper-mode').value,feed:q('#paper-feed').value,max_age_days:Number(q('#paper-age').value)});T.sessions=await request('/paper/sessions');fillSelects();showSession(s);revealResult('paper-result');notify('本地模拟账户已创建，当前暂停。');});});
 q('#paper-history').addEventListener('change',e=>task(null,async()=>{if(e.target.value)showSession(await request('/paper/sessions/'+e.target.value));else{T.session=null;q('#paper-controls').hidden=true;q('#paper-result').innerHTML='<p class="empty-copy">请选择模拟账户。</p>';}}));
